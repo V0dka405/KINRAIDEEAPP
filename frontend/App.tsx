@@ -17,6 +17,7 @@ import {
   SafeAreaView, StatusBar, Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Utensils, MapPin, Search, User, Heart, History,
   Settings, Bell, ChevronLeft, Star, MessageSquare,
@@ -34,7 +35,17 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 // 💡 For mobile development, replace 'localhost' with your computer's IP address.
 //    Android Emulator: 10.0.2.2, iOS Simulator: localhost
-const API_URL = Platform.OS === 'android' ? 'http://10.0.2.2:5000/api' : 'http://localhost:5000/api';
+// ==================== API URL สำหรับทดสอบ (Windows + Wi-Fi) ====================
+const API_URL = __DEV__ 
+  ? Platform.select({
+      android: 'http://10.0.2.2:5000/api',
+      ios: 'http://localhost:5000/api',
+      default: 'http://localhost:5000/api',
+    })
+  : 'https://your-production-url.com/api';
+// =============================================================================
+// Google Maps API Key จาก .env (Expo จะดึงค่าที่มี prefix EXPO_PUBLIC_ อัตโนมัติ)
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 // ─── Animation wrapper (ใช้แทน motion/react) ─────────────────
 const FadeSlide: React.FC<{ children: React.ReactNode; delay?: number }> = ({ children, delay = 0 }) => {
@@ -159,7 +170,7 @@ const Login: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
         throw new Error(data.message || 'เข้าสู่ระบบไม่สำเร็จ');
       }
 
-      // TODO: Store the token (data.token) in AsyncStorage for persistent login
+      await AsyncStorage.setItem('token', data.token);
       Alert.alert('เข้าสู่ระบบสำเร็จ!', `ยินดีต้อนรับกลับมา, ${data.user.name}`);
       navigate('home');
 
@@ -228,7 +239,7 @@ const Signup: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
         throw new Error(data.message || 'เกิดข้อผิดพลาดในการสมัครสมาชิก');
       }
 
-      // TODO: Store the token (data.token) in AsyncStorage for persistent login
+      await AsyncStorage.setItem('token', data.token);
       Alert.alert('สมัครสำเร็จ!', 'ยินดีต้อนรับสู่ Kin-Rai-Dee!');
       navigate('onboarding1');
 
@@ -434,34 +445,67 @@ const Randomizer: React.FC<{
     const fetchRandom = async () => {
     try {
       // 1. สุ่ม category จาก backend
-      const resCategory = await fetch(`${API_URL}/restaurants/random-category`);
+      const resCategory = await fetch(`${API_URL}/restaurants/random-category`);  
       const dataCategory = await resCategory.json();
-
       const category = dataCategory.category;
+      
+      // 2. ดึงข้อมูลพิกัดปัจจุบัน (ถ้ายังไม่มีจาก Onboarding)
+      let currentLoc = location;
+      if (!currentLoc) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const pos = await Location.getCurrentPositionAsync({});
+          currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        }
+      }
 
-      // 2. (ยังไม่มี Google API → mock ไว้ก่อน)
-      // 👉 ตรงนี้เว้นไว้ให้คุณไปต่อ Google API ทีหลัง
+      // 3. ดึงร้านอาหารจาก Backend (Google Places API)
+      if (currentLoc) {
+        const queryParams = new URLSearchParams({
+          lat: currentLoc.lat.toString(),
+          lng: currentLoc.lng.toString(),
+          category: category,
+          radius: (config.maxDistance * 1000).toString(),
+          limit: '1' // เอาแค่ร้านเดียว
+        });
 
-      const fakeRestaurant: Restaurant = {
-      id: 'temp-id',
-      name: 'กำลังหาใน Map...',
-      rating: 4.0,
-      reviewCount: 0,
-      priceLevel: config.maxBudget,
-      category: category,   // ⭐ สำคัญ
-      address: 'กำลังค้นหา...',
-      distance: '',
-      imageUrl: 'https://picsum.photos/400',
-      description: '',
-      reviews: [],
-      videoReviews: [],
-      menu: []
-    };
+        const resRestaurants = await fetch(`${API_URL}/restaurants?${queryParams}`);
+        const dataRestaurants = await resRestaurants.json();
 
-    setResult(fakeRestaurant);
+        if (dataRestaurants.restaurants && dataRestaurants.restaurants.length > 0) {
+          const fetchedRestaurant = dataRestaurants.restaurants[0];
+          
+          // Map ข้อมูลจาก Backend กลับมาเป็น Restaurant type ของ Frontend
+          const realRestaurant: Restaurant = {
+            id: fetchedRestaurant._id || 'api-id',
+            name: fetchedRestaurant.name,
+            rating: fetchedRestaurant.rating || 0,
+            reviewCount: fetchedRestaurant.reviewCount || 0,
+            priceLevel: fetchedRestaurant.priceLevel || 2,
+            category: fetchedRestaurant.category || category,
+            address: fetchedRestaurant.address || 'ไม่ระบุที่อยู่',
+            distance: 'ใกล้คุณ', // หรือคำนวณจาก lat, lng ทีหลัง
+            imageUrl: fetchedRestaurant.imageUrl || 'https://picsum.photos/400',
+            description: fetchedRestaurant.description || 'สุ่มเจอร้านนี้เลย!',
+            location: {
+              lat: fetchedRestaurant.location?.coordinates[1] || currentLoc.lat,
+              lng: fetchedRestaurant.location?.coordinates[0] || currentLoc.lng
+            },
+            reviews: [],
+            videoReviews: [],
+            menu: []
+          };
+
+          if (isMounted) setResult(realRestaurant);
+          return;
+        }
+      }
+
+      // Fallback ถ้าหาพิกัดไม่ได้ หรือ API ไม่เจอร้านเลย
+      throw new Error("No nearby restaurants found from API");
 
   } catch (err) {
-    fallbackMock();
+    if (isMounted) fallbackMock();
   }
 };
     
@@ -506,14 +550,9 @@ const Randomizer: React.FC<{
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   const CATEGORY_EMOJI: Record<string, string> = {
-    'Street Food': '🌮',
-    'Noodles':     '🍜',
-    'Rice Dishes': '🍚',
-    'Cafe':        '☕',
-    'Japanese':    '🍣',
-    'Korean':      '🥩',
-    'Western':     '🍔',
-    'Dessert':     '🍰',
+    'ก๋วยเตี๋ยว': '🍜',
+    
+    
   };
 
   return (
@@ -610,6 +649,23 @@ const Result: React.FC<{
   location: { lat: number; lng: number } | null;
 }> = ({ restaurant, navigate, onFavorite, favorites, location }) => {
   const isFav = favorites.some(f => f.id === restaurant.id);
+  
+  const handleNavigate = () => {
+    import('react-native').then(({ Linking, Platform }) => {
+      const scheme = Platform.select({ ios: 'maps:0,0?q=', android: 'geo:0,0?q=' });
+      const latLng = `${restaurant.location?.lat ?? 0},${restaurant.location?.lng ?? 0}`;
+      const label = encodeURIComponent(restaurant.name);
+      const url = Platform.select({
+        ios: `${scheme}${label}@${latLng}`,
+        android: `${scheme}${latLng}(${label})`
+      }) || `https://www.google.com/maps/search/?api=1&query=${latLng}`;
+
+      Linking.openURL(url).catch(() => {
+        Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${latLng}`);
+      });
+    });
+  };
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
@@ -648,7 +704,7 @@ const Result: React.FC<{
 
           {/* Action Buttons */}
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
-            <Button onPress={() => navigate('map')} style={{ flex: 1 }}>
+            <Button onPress={handleNavigate} style={{ flex: 1 }}>
               <Navigation size={16} color="#fff" style={{ marginRight: 6 }} />
               <Text style={{ color: '#fff', fontWeight: '700' }}>นำทาง</Text>
             </Button>
@@ -996,6 +1052,16 @@ const SettingsView: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }
     { section: 'บัญชี', items: ['แก้ไขโปรไฟล์', 'การแจ้งเตือน', 'ความเป็นส่วนตัว'] },
     { section: 'การตั้งค่า', items: ['ข้อจำกัดอาหาร', 'งบประมาณเริ่มต้น'] },
   ];
+  
+  const handleLogout = async () => {
+    try {
+      await AsyncStorage.removeItem('token');
+      navigate('login');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
       <View style={styles.homeHeader}>
@@ -1016,7 +1082,7 @@ const SettingsView: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }
             ))}
           </Card>
         ))}
-        <Button onPress={() => navigate('login')} variant="outline" style={{ borderColor: '#fca5a5' }}>
+        <Button onPress={handleLogout} variant="outline" style={{ borderColor: '#fca5a5' }}>
           <Text style={{ color: '#ef4444', fontWeight: '700' }}>ออกจากระบบ</Text>
         </Button>
       </ScrollView>
@@ -1082,7 +1148,7 @@ const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) =
       renderItem={({ item }) => (
         <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
           <Image source={{ uri: item.imageUrl }} style={StyleSheet.absoluteFillObject} />
-          <View style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
             <Play size={32} color="#fff" fill="#fff" />
           </View>
           <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 10 }}>
@@ -1095,46 +1161,211 @@ const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) =
   </SafeAreaView>
 );
 
-// ─── AddReview ────────────────────────────────────────────────
+// ─── AddReview (FIXED) ────────────────────────────────────────────────
 const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => void }> = ({ restaurant, navigate }) => {
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    try {
+      // ✅ CHECK 1: Validate input
+      if (!comment.trim()) {
+        Alert.alert('⚠️ ข้อมูลไม่ครบ', 'กรุณาเขียนความคิดเห็นอย่างน้อย 1 ตัวอักษร');
+        return;
+      }
+
+      // ✅ CHECK 2: Get token
+      const token = await AsyncStorage.getItem('token');
+      if (!token) {
+        Alert.alert('ต้องเข้าสู่ระบบ', 'กรุณาเข้าสู่ระบบก่อนรีวิว');
+        navigate('login');
+        return;
+      }
+
+      // ✅ CHECK 3: Validate restaurant ID
+      if (!restaurant.id) {
+        Alert.alert('ไม่สามารถรีวิวได้', 'ไม่มีข้อมูลร้านอาหาร (ID หาย)');
+        return;
+      }
+
+      // ✅ CHECK 4: Skip review if it's a temporary/API restaurant
+      // (สำหรับร้านจาก randomizer ที่ยังไม่ได้บันทึกใน DB)
+      if (restaurant.id.includes('temp') || restaurant.id.includes('api-id')) {
+        Alert.alert(
+          '⚠️ ร้านนี้อาจเป็นข้อมูลใหม่',
+          'กรุณาลองสุ่มร้านอื่นที่มีในระบบ หรือติดต่อแอดมิน',
+          [
+            { text: 'ยกเลิก', onPress: () => navigate('result') },
+            { text: 'ส่งต่อไปเพื่อบันทึกร้าน', onPress: proceedWithReview }
+          ]
+        );
+        return;
+      }
+
+      proceedWithReview();
+
+    } catch (e: any) {
+      Alert.alert('❌ ข้อผิดพลาด', e.message || 'เกิดข้อผิดพลาดที่ไม่คาดคิด');
+    }
+  };
+
+  const proceedWithReview = async () => {
+    try {
+      setLoading(true);
+
+      const token = await AsyncStorage.getItem('token');
+      if (!token) return;
+
+      console.log('📤 Sending review:', {
+        restaurantId: restaurant.id,
+        rating,
+        comment: comment.trim(),
+        timestamp: new Date().toISOString(),
+      });
+
+      const res = await fetch(`${API_URL}/restaurants/${restaurant.id}/reviews`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          rating,
+          comment: comment.trim(),
+        }),
+      });
+
+      // ✅ READ RESPONSE (สำคัญ!)
+      const data = await res.json();
+
+      console.log('📥 Response status:', res.status);
+      console.log('📥 Response data:', data);
+
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `HTTP ${res.status}: เกิดข้อผิดพลาดในการส่งรีวิว`);
+      }
+
+      Alert.alert('✅ สำเร็จ!', 'ส่งรีวิวแล้ว ขอบคุณสำหรับการแบ่งปันประสบการณ์');
+      navigate('result');
+
+    } catch (e: any) {
+      console.error('❌ Review submission error:', e);
+      Alert.alert(
+        '❌ ไม่สามารถส่งรีวิว',
+        e.message || 'กรุณาลองใหม่หรือติดต่อแอดมิน'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+      
+      {/* Header */}
       <View style={styles.homeHeader}>
         <TouchableOpacity onPress={() => navigate('result')} style={styles.iconBtn}>
           <ChevronLeft size={24} color={COLORS.dark} />
         </TouchableOpacity>
         <Text style={{ fontSize: 20, fontWeight: '900', marginLeft: 12 }}>เขียนรีวิว</Text>
       </View>
-      <ScrollView contentContainerStyle={{ padding: 20 }}>
-        <Card style={{ marginBottom: 16 }}>
-          <Text style={{ fontWeight: '700', fontSize: 16 }}>{restaurant.name}</Text>
-          <Text style={{ color: COLORS.secondary, fontSize: 13 }}>{restaurant.address}</Text>
+
+      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+        {/* Restaurant Info Card */}
+        <Card style={{ marginBottom: 24, backgroundColor: `${COLORS.primary}10`, borderColor: COLORS.primary, borderWidth: 1 }}>
+          <Text style={{ fontWeight: '700', fontSize: 16, color: COLORS.dark }}>{restaurant.name}</Text>
+          <Text style={{ color: COLORS.secondary, fontSize: 13, marginTop: 4 }}>
+            📍 {restaurant.address}
+          </Text>
+          {restaurant.id.includes('temp') || restaurant.id.includes('api-id') ? (
+            <Text style={{ color: '#f59e0b', fontSize: 12, marginTop: 6, fontStyle: 'italic' }}>
+              ⚠️ ร้านนี้เพิ่งเจอจากการสุ่ม อาจยังไม่บันทึกในระบบ
+            </Text>
+          ) : null}
         </Card>
-        <Text style={styles.inputLabel}>คะแนน</Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 20 }}>
-          {[1, 2, 3, 4, 5].map(n => (
-            <TouchableOpacity key={n} onPress={() => setRating(n)}>
-              <Text style={{ fontSize: 32, opacity: n <= rating ? 1 : 0.3 }}>⭐</Text>
-            </TouchableOpacity>
-          ))}
+
+        {/* Rating Section */}
+        <View style={{ marginBottom: 24 }}>
+          <Text style={[styles.inputLabel, { marginBottom: 12 }]}>⭐ คะแนนของคุณ</Text>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            {[1, 2, 3, 4, 5].map(n => (
+              <TouchableOpacity 
+                key={n} 
+                onPress={() => setRating(n)}
+                style={{
+                  padding: 8,
+                  borderRadius: 12,
+                  backgroundColor: n <= rating ? `${COLORS.primary}20` : 'transparent',
+                  borderWidth: n <= rating ? 2 : 1,
+                  borderColor: n <= rating ? COLORS.primary : COLORS.border,
+                }}
+              >
+                <Text style={{ fontSize: 32 }}>⭐</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 8 }}>
+            {rating === 1 ? '😢 แย่มาก' : rating === 2 ? '😐 ไม่ดี' : rating === 3 ? '😊 พอใจ' : rating === 4 ? '😄 ดีมาก' : '😍 ยอดเยี่ยม!'}
+          </Text>
         </View>
-        <Text style={styles.inputLabel}>ความคิดเห็น</Text>
-        <TextInput
-          style={[styles.input, { height: 120, textAlignVertical: 'top' }]}
-          multiline
-          placeholder="เล่าประสบการณ์ของคุณ..."
-          value={comment}
-          onChangeText={setComment}
-        />
-        <Button onPress={() => { Alert.alert('✅', 'ส่งรีวิวแล้ว ขอบคุณ!'); navigate('result'); }} size="lg" style={{ marginTop: 20 }}>
-          ส่งรีวิว
+
+        {/* Comment Section */}
+        <View>
+          <Text style={[styles.inputLabel, { marginBottom: 8 }]}>💬 ความคิดเห็น</Text>
+          <TextInput
+            style={[styles.input, { 
+              height: 140, 
+              textAlignVertical: 'top',
+              borderColor: comment.trim() ? COLORS.primary : COLORS.border,
+              borderWidth: comment.trim() ? 2 : 1,
+            }]}
+            multiline
+            placeholder="เล่าประสบการณ์ของคุณ... (เช่น อร่อยมาก! เสิร์ฟเร็ว ราคาเหมาะสม)"
+            placeholderTextColor={COLORS.secondary}
+            value={comment}
+            onChangeText={setComment}
+            editable={!loading}
+            maxLength={500}
+          />
+          <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 6, textAlign: 'right' }}>
+            {comment.length}/500
+          </Text>
+        </View>
+
+        {/* Submit Button */}
+        <Button 
+          onPress={handleSubmit} 
+          size="lg" 
+          style={{ marginTop: 28 }} 
+          disabled={loading || !comment.trim()}
+        >
+          {loading ? (
+            <>
+              <Text style={{ color: '#fff', fontWeight: '700', marginRight: 8 }}>กำลังส่ง...</Text>
+            </>
+          ) : (
+            <>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>✓ ส่งรีวิว</Text>
+            </>
+          )}
         </Button>
+
+        {/* Cancel Link */}
+        <TouchableOpacity 
+          onPress={() => navigate('result')}
+          disabled={loading}
+          style={{ marginTop: 12, alignItems: 'center' }}
+        >
+          <Text style={{ color: COLORS.secondary, fontSize: 14 }}>ยกเลิก</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 };
+
+// ─── NearbyRestaurants ─────────────────────────────────────────────
 
 // ─── HistoryView ─────────────────────────────────────────────
 const HistoryView: React.FC<{
@@ -1193,9 +1424,20 @@ export default function App() {
     });
   };
 
-  const onSelect = (r: Restaurant) => {
+  const onSelect = async (r: Restaurant) => {
     setSelected(r);
     setHistory(prev => [r, ...prev.filter(p => p.id !== r.id).slice(0, 19)]);
+    
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (token && r.id && !r.id.includes('temp') && !r.id.includes('api-id')) {
+        await fetch(`${API_URL}/users/me/history`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ restaurantId: r.id, action: 'viewed' })
+        });
+      }
+    } catch (e) {}
   };
 
   const requestLocation = async () => {
@@ -1220,11 +1462,61 @@ export default function App() {
     navigate('randomizer');
   };
 
-  const toggleFavorite = (r: Restaurant) => {
-    setFavorites(prev =>
-      prev.some(f => f.id === r.id) ? prev.filter(f => f.id !== r.id) : [r, ...prev]
-    );
+  const toggleFavorite = async (r: Restaurant) => {
+    const isFav = favorites.some(f => f.id === r.id);
+    setFavorites(prev => isFav ? prev.filter(f => f.id !== r.id) : [r, ...prev]);
+
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (token && r.id && !r.id.includes('temp') && !r.id.includes('api-id')) {
+        await fetch(`${API_URL}/users/me/favorites/${r.id}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      }
+    } catch (e) {}
   };
+
+  // ดึงข้อมูล History และ Favorites จาก Backend
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        const token = await AsyncStorage.getItem('token');
+        if (!token) return;
+        
+        const [resFav, resHist] = await Promise.all([
+          fetch(`${API_URL}/users/me/favorites`, { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(`${API_URL}/users/me/history`, { headers: { Authorization: `Bearer ${token}` } })
+        ]);
+        
+        const mapToRestaurant = (f: any): Restaurant => ({
+          id: f._id, name: f.name, rating: f.rating || 0, reviewCount: f.reviewCount || 0,
+          priceLevel: f.priceLevel || 2, category: f.category || 'General',
+          address: f.address || '', distance: f.distance || 'ใกล้คุณ',
+          imageUrl: f.imageUrl || 'https://picsum.photos/400', description: f.description || '',
+          location: { lat: f.location?.coordinates?.[1] || 0, lng: f.location?.coordinates?.[0] || 0 },
+          reviews: [], videoReviews: [], menu: []
+        });
+
+        if (resFav.ok) {
+          const favData = await resFav.json();
+          setFavorites(favData.map(mapToRestaurant));
+        }
+
+        if (resHist.ok) {
+          const histData = await resHist.json();
+          const histRestaurants = histData.map((h: any) => h.restaurant).filter(Boolean).map(mapToRestaurant);
+          const uniqueHist = Array.from(new Set(histRestaurants.map((r: any) => r.id)))
+            .map(id => histRestaurants.find((r: any) => r.id === id));
+          setHistory(uniqueHist as Restaurant[]);
+        }
+      } catch (e) {}
+    };
+
+    if (view === 'home' || view === 'profile') {
+      loadUserData();
+    }
+  }, [view]);
 
   // ── Render ──
   const render = () => {
