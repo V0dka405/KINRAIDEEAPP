@@ -36,12 +36,12 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 // 💡 For mobile development, replace 'localhost' with your computer's IP address.
 //    Android Emulator: 10.0.2.2, iOS Simulator: localhost
 // ==================== API URL สำหรับทดสอบ (Windows + Wi-Fi) ====================
-const API_URL = __DEV__ 
+const API_URL = __DEV__
   ? Platform.select({
-      android: 'http://10.0.2.2:5000/api',
-      ios: 'http://localhost:5000/api',
-      default: 'http://localhost:5000/api',
-    })
+    android: 'http://10.0.2.2:5000/api',
+    ios: 'http://localhost:5000/api',
+    default: 'http://localhost:5000/api',
+  })
   : 'https://your-production-url.com/api';
 // =============================================================================
 // Google Maps API Key จาก .env (Expo จะดึงค่าที่มี prefix EXPO_PUBLIC_ อัตโนมัติ)
@@ -419,224 +419,406 @@ const Home: React.FC<{
 };
 
 // ─── Randomizer ───────────────────────────────────────────────
+const CATEGORY_EMOJI: Record<string, string> = {
+  'Street Food': '🍢',
+  'Noodles': '🍜',
+  'Rice Dishes': '🍚',
+  'Cafe': '☕',
+  'Japanese': '🍣',
+  'Korean': '🥘',
+  'Western': '🍔',
+  'Dessert': '🍰',
+  'ก๋วยเตี๋ยว': '🍜',
+};
+
+const openGoogleMaps = (restaurant: Restaurant) => {
+  import('react-native').then(({ Linking, Platform }) => {
+    const lat = restaurant.location?.lat ?? 0;
+    const lng = restaurant.location?.lng ?? 0;
+    const label = encodeURIComponent(restaurant.name);
+    // เปิด Google Maps โดยตรง (ถ้าติดตั้งอยู่) หรือ fallback ไป browser
+    const googleMapsUrl = Platform.select({
+      ios: `comgooglemaps://?q=${label}&center=${lat},${lng}&zoom=15`,
+      android: `google.navigation:q=${lat},${lng}&mode=w`,
+    }) || `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+
+    Linking.canOpenURL(googleMapsUrl).then(supported => {
+      if (supported) {
+        Linking.openURL(googleMapsUrl);
+      } else {
+        // fallback → web browser
+        Linking.openURL(
+          `https://www.google.com/maps/search/?api=1&query=${lat},${lng}&query_place_id=${label}`
+        );
+      }
+    }).catch(() => {
+      Linking.openURL(
+        `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+      );
+    });
+  });
+};
+
 const Randomizer: React.FC<{
   config: RandomConfig;
   location: { lat: number; lng: number } | null;
   onSelect: (r: Restaurant) => void;
   navigate: (v: AppView) => void;
 }> = ({ config, location, onSelect, navigate }) => {
-  const spin       = useRef(new Animated.Value(0)).current;
-  const popScale   = useRef(new Animated.Value(0)).current;
-  const popOpacity = useRef(new Animated.Value(0)).current;
-  const [showPopup, setShowPopup] = useState(false);
-  const [result, setResult] = useState<Restaurant | null>(null);
+  const spin = useRef(new Animated.Value(0)).current;
+  const [isLoading, setIsLoading] = useState(true);
+  const [results, setResults] = useState<Restaurant[]>([]);
+  const [statusMsg, setStatusMsg] = useState('หาร้านอร่อยในบริเวณใกล้คุณ');
+  const [notFound, setNotFound] = useState(false);
+  const listOpacity = useRef(new Animated.Value(0)).current;
+  const listTranslateY = useRef(new Animated.Value(30)).current;
 
-  // หมุน icon ตลอด
+  // หมุน icon ขณะโหลด
   useEffect(() => {
-    Animated.loop(
+    const anim = Animated.loop(
       Animated.timing(spin, { toValue: 1, duration: 1200, useNativeDriver: true })
-    ).start();
+    );
+    anim.start();
+    return () => anim.stop();
   }, [spin]);
 
   // ดึงข้อมูลจาก Backend
   useEffect(() => {
     let isMounted = true;
-    
-    const fetchRandom = async () => {
-    try {
-      // 1. สุ่ม category จาก backend
-      const resCategory = await fetch(`${API_URL}/restaurants/random-category`);  
-      const dataCategory = await resCategory.json();
-      const category = dataCategory.category;
-      
-      // 2. ดึงข้อมูลพิกัดปัจจุบัน (ถ้ายังไม่มีจาก Onboarding)
-      let currentLoc = location;
-      if (!currentLoc) {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({});
-          currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        }
-      }
 
-      // 3. ดึงร้านอาหารจาก Backend (Google Places API)
-      if (currentLoc) {
-        const queryParams = new URLSearchParams({
-          lat: currentLoc.lat.toString(),
-          lng: currentLoc.lng.toString(),
-          category: category,
-          radius: (config.maxDistance * 1000).toString(),
-          limit: '1' // เอาแค่ร้านเดียว
+    const fetchRandom = async () => {
+      try {
+        const resCategory = await fetch(`${API_URL}/restaurants/random-category`);
+        const dataCategory = await resCategory.json();
+        const category = dataCategory.category;
+
+        let currentLoc = location;
+        if (!currentLoc) {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const pos = await Location.getCurrentPositionAsync({});
+            currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          }
+        }
+
+        if (currentLoc) {
+          // ✅ ลองขยายระยะทีละขั้น
+          const radiusSteps = [
+            config.maxDistance,
+            ...[5, 10, 20].filter(r => r > config.maxDistance),
+          ];
+
+          for (const radius of radiusSteps) {
+            if (!isMounted) return;
+
+            if (radius > config.maxDistance) {
+              setStatusMsg(`ไม่พบร้านในระยะ ${radiusSteps[radiusSteps.indexOf(radius) - 1]} km กำลังขยายระยะเป็น ${radius} km...`);
+            }
+
+            const queryParams = new URLSearchParams({
+              lat: currentLoc.lat.toString(),
+              lng: currentLoc.lng.toString(),
+              category,
+              radius: (radius * 1000).toString(),
+              limit: '5',
+            });
+
+            const resRestaurants = await fetch(`${API_URL}/restaurants?${queryParams}`);
+            const dataRestaurants = await resRestaurants.json();
+
+            if (dataRestaurants.restaurants && dataRestaurants.restaurants.length > 0) {
+              const mapped: Restaurant[] = dataRestaurants.restaurants.map((f: any, idx: number) => ({
+                id: f._id || `api-${idx}`,
+                name: f.name,
+                rating: f.rating || 0,
+                reviewCount: f.reviewCount || 0,
+                priceLevel: f.priceLevel || 2,
+                category: f.category || category,
+                address: f.address || 'ไม่ระบุที่อยู่',
+                distance: 'ใกล้คุณ',
+                imageUrl: f.imageUrl || `https://picsum.photos/seed/${idx}/800/600`,
+                description: f.description || 'ร้านแนะนำในบริเวณใกล้เคียง',
+                location: {
+                  lat: f.location?.coordinates[1] || currentLoc!.lat,
+                  lng: f.location?.coordinates[0] || currentLoc!.lng,
+                },
+                reviews: [], videoReviews: [], menu: [],
+              }));
+              if (isMounted) { setResults(mapped); setIsLoading(false); }
+              return;
+            }
+          }
+        }
+        throw new Error('No nearby restaurants');
+      } catch {
+        if (isMounted) { fallbackMock(); }
+      }
+    };
+
+    const fallbackMock = () => {
+      const radiusSteps = [config.maxDistance, 5, 10, 20].filter(
+        (r, i, arr) => arr.indexOf(r) === i && r >= config.maxDistance
+      );
+
+      for (const radius of radiusSteps) {
+        const pool = MOCK_RESTAURANTS.filter(r => {
+          const dist = parseFloat(r.distance);
+          const budgetOk = r.priceLevel <= config.maxBudget;
+          const distanceOk = dist <= radius;
+          const categoryOk = config.categories.length === 0
+            || config.categories.includes(r.category);
+          return budgetOk && distanceOk && categoryOk;
         });
 
-        const resRestaurants = await fetch(`${API_URL}/restaurants?${queryParams}`);
-        const dataRestaurants = await resRestaurants.json();
-
-        if (dataRestaurants.restaurants && dataRestaurants.restaurants.length > 0) {
-          const fetchedRestaurant = dataRestaurants.restaurants[0];
-          
-          // Map ข้อมูลจาก Backend กลับมาเป็น Restaurant type ของ Frontend
-          const realRestaurant: Restaurant = {
-            id: fetchedRestaurant._id || 'api-id',
-            name: fetchedRestaurant.name,
-            rating: fetchedRestaurant.rating || 0,
-            reviewCount: fetchedRestaurant.reviewCount || 0,
-            priceLevel: fetchedRestaurant.priceLevel || 2,
-            category: fetchedRestaurant.category || category,
-            address: fetchedRestaurant.address || 'ไม่ระบุที่อยู่',
-            distance: 'ใกล้คุณ', // หรือคำนวณจาก lat, lng ทีหลัง
-            imageUrl: fetchedRestaurant.imageUrl || 'https://picsum.photos/400',
-            description: fetchedRestaurant.description || 'สุ่มเจอร้านนี้เลย!',
-            location: {
-              lat: fetchedRestaurant.location?.coordinates[1] || currentLoc.lat,
-              lng: fetchedRestaurant.location?.coordinates[0] || currentLoc.lng
-            },
-            reviews: [],
-            videoReviews: [],
-            menu: []
-          };
-
-          if (isMounted) setResult(realRestaurant);
+        if (pool.length > 0) {
+          if (radius > config.maxDistance) {
+            setStatusMsg(`ไม่พบร้านในระยะ ${config.maxDistance} km พบร้านในระยะ ${radius} km แทน`);
+          }
+          const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, 5);
+          setResults(shuffled);
+          setIsLoading(false);
           return;
         }
       }
 
-      // Fallback ถ้าหาพิกัดไม่ได้ หรือ API ไม่เจอร้านเลย
-      throw new Error("No nearby restaurants found from API");
-
-  } catch (err) {
-    if (isMounted) fallbackMock();
-  }
-};
-    
-    const fallbackMock = () => {
-      const pool = MOCK_RESTAURANTS.filter(r => r.priceLevel <= config.maxBudget);
-      const list = pool.length > 0 ? pool : MOCK_RESTAURANTS;
-      setResult(list[Math.floor(Math.random() * list.length)]);
+      // ✅ ไม่เจอเลยทุกระยะ
+      setResults([]);
+      setNotFound(true);
+      setIsLoading(false);
     };
 
     fetchRandom();
-    
     return () => { isMounted = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // แสดง popup หลังจากได้ผลลัพธ์และรอ 1.5 วินาที
+  // Animate list เข้ามาเมื่อโหลดเสร็จ
   useEffect(() => {
-    if (!result) return;
-    
-    const timer1 = setTimeout(() => {
-      setShowPopup(true);
+    if (!isLoading && results.length > 0) {
       Animated.parallel([
-        Animated.spring(popScale, { toValue: 1, useNativeDriver: true, tension: 80, friction: 8 }),
-        Animated.timing(popOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+        Animated.timing(listOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
+        Animated.spring(listTranslateY, { toValue: 0, useNativeDriver: true, tension: 70, friction: 10 }),
       ]).start();
-      
-    }, 1500);
-
-    return () => clearTimeout(timer1);
-  }, [result, popScale, popOpacity]);
-
-  // พาไปหน้า Result หลังจากโชว์ Popup 3 วิ
-  useEffect(() => {
-    if (showPopup && result) {
-      const timer2 = setTimeout(() => {
-        onSelect(result);
-        navigate('result');
-      }, 3000);
-      return () => clearTimeout(timer2);
     }
-  }, [showPopup, result, navigate, onSelect]);
+  }, [isLoading, results]);
 
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
-  const CATEGORY_EMOJI: Record<string, string> = {
-    'ก๋วยเตี๋ยว': '🍜',
-    
-    
-  };
+  // ─── Loading State ───
+  if (isLoading) {
+    return (
+      <View style={[styles.screen, { backgroundColor: COLORS.bg, justifyContent: 'center', alignItems: 'center' }]}>
+        <Animated.View style={{ transform: [{ rotate }], marginBottom: 32 }}>
+          <View style={[styles.fabButton, { width: 120, height: 120, borderRadius: 60 }]}>
+            <Dice5 size={60} color="#fff" />
+          </View>
+        </Animated.View>
+        <Text style={{ fontSize: 22, fontWeight: '900', color: COLORS.dark, letterSpacing: -0.5 }}>
+          กำลังสุ่มอาหาร...
+        </Text>
+        <Text style={{ fontSize: 14, color: COLORS.secondary, marginTop: 8, fontStyle: 'italic', textAlign: 'center', paddingHorizontal: 32 }}>
+          {statusMsg}
+        </Text>
+      </View>
+    );
+  }
 
+  // ─── Not Found State ─── 
+  if (notFound) {
+    return (
+      <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg, justifyContent: 'center', alignItems: 'center', padding: 32 }]}>
+        <Text style={{ fontSize: 48, marginBottom: 16 }}>🍽</Text>
+        <Text style={{ fontSize: 20, fontWeight: '900', color: COLORS.dark, textAlign: 'center', marginBottom: 8 }}>
+          ไม่พบร้านอาหาร
+        </Text>
+        <Text style={{ fontSize: 14, color: COLORS.secondary, textAlign: 'center', marginBottom: 32 }}>
+          ไม่พบร้านในทุกระยะทางสำหรับหมวดหมู่ที่เลือก
+        </Text>
+        <TouchableOpacity
+          onPress={() => navigate('random')}
+          style={{ backgroundColor: COLORS.primary, borderRadius: 999, paddingVertical: 14, paddingHorizontal: 32 }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>กรุณาเลือกหมวดหมู่อื่น</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
+
+  // ─── Results List ───
   return (
-    <View style={[styles.screen, { backgroundColor: COLORS.bg, justifyContent: 'center', alignItems: 'center' }]}>
-      {/* spinning icon */}
-      <Animated.View style={{ transform: [{ rotate }], marginBottom: 32 }}>
-        <View style={[styles.fabButton, { width: 120, height: 120, borderRadius: 60 }]}>
-          <Dice5 size={60} color="#fff" />
+    <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+
+      {/* Header */}
+      <View style={[styles.homeHeader, { paddingBottom: 12 }]}>
+        <TouchableOpacity onPress={() => navigate('random')} style={styles.iconBtn}>
+          <ChevronLeft size={24} color={COLORS.dark} />
+        </TouchableOpacity>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={{ fontSize: 22, fontWeight: '900', letterSpacing: -0.5, color: COLORS.dark }}>
+            ผลการสุ่ม 🎲
+          </Text>
+          <Text style={{ fontSize: 13, color: COLORS.secondary, marginTop: 2 }}>
+            พบ {results.length} ร้านแนะนำสำหรับคุณ
+          </Text>
         </View>
-      </Animated.View>
-      <Text style={{ fontSize: 22, fontWeight: '900', color: COLORS.dark, letterSpacing: -0.5 }}>
-        กำลังสุ่มอาหาร...
-      </Text>
+        <TouchableOpacity
+          onPress={() => navigate('randomizer')}
+          style={[styles.iconBtn, { backgroundColor: `${COLORS.primary}15`, borderColor: COLORS.primary }]}
+        >
+          <RefreshCw size={18} color={COLORS.primary} />
+        </TouchableOpacity>
+      </View>
 
-      {/* popup overlay */}
-      {showPopup && result && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          {/* backdrop มืดๆ */}
-          <Animated.View style={[
-            StyleSheet.absoluteFill,
-            { backgroundColor: 'rgba(0,0,0,0.45)', opacity: popOpacity }
-          ]} />
-
-          {/* popup card */}
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Animated.View style={{
+      {/* Restaurant List */}
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
+        style={{ opacity: listOpacity, transform: [{ translateY: listTranslateY }] }}
+      >
+        {results.map((restaurant, index) => (
+          <View
+            key={restaurant.id}
+            style={{
               backgroundColor: '#fff',
-              borderRadius: 32,
-              padding: 32,
-              alignItems: 'center',
-              width: 280,
-              transform: [{ scale: popScale }],
+              borderRadius: 20,
+              marginBottom: 16,
+              overflow: 'hidden',
+              borderWidth: 1,
+              borderColor: COLORS.border,
               shadowColor: '#000',
-              shadowOffset: { width: 0, height: 12 },
-              shadowOpacity: 0.2,
-              shadowRadius: 24,
-              elevation: 20,
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.06,
+              shadowRadius: 8,
+              elevation: 3,
+            }}
+          >
+            {/* Rank Badge */}
+            <View style={{
+              position: 'absolute', top: 12, left: 12, zIndex: 10,
+              width: 32, height: 32, borderRadius: 16,
+              backgroundColor: index === 0 ? COLORS.primary : 'rgba(0,0,0,0.55)',
+              justifyContent: 'center', alignItems: 'center',
             }}>
-              {/* emoji ประเภท */}
-              <Text style={{ fontSize: 56, marginBottom: 8 }}>
-                {CATEGORY_EMOJI[result.category] ?? '🍽'}
+              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>
+                {index === 0 ? '★' : index + 1}
+              </Text>
+            </View>
+
+            {/* Restaurant Image */}
+            <Image
+              source={{ uri: restaurant.imageUrl }}
+              style={{ width: '100%', height: 160 }}
+            />
+
+            {/* Category Badge */}
+            <View style={{
+              position: 'absolute', top: 12, right: 12,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999,
+              flexDirection: 'row', alignItems: 'center', gap: 4,
+            }}>
+              <Text style={{ fontSize: 12 }}>{CATEGORY_EMOJI[restaurant.category] ?? '🍽'}</Text>
+              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>{restaurant.category}</Text>
+            </View>
+
+            {/* Info */}
+            <View style={{ padding: 16 }}>
+              <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.dark, letterSpacing: -0.3 }} numberOfLines={1}>
+                {restaurant.name}
               </Text>
 
-              {/* label ประเภท */}
-              <View style={{
-                backgroundColor: `${COLORS.primary}18`,
-                paddingHorizontal: 16, paddingVertical: 6,
-                borderRadius: 999, marginBottom: 14,
-              }}>
-                <Text style={{ color: COLORS.primary, fontWeight: '800', fontSize: 13 }}>
-                  {result.category}
+              {/* Rating + Price */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
+                <StarRating rating={restaurant.rating} size={13} />
+                <Text style={{ fontSize: 12, color: COLORS.secondary }}>
+                  ({restaurant.reviewCount.toLocaleString()})
+                </Text>
+                <PriceTag level={restaurant.priceLevel} />
+              </View>
+
+              {/* Address */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 5 }}>
+                <MapPin size={13} color={COLORS.secondary} />
+                <Text style={{ fontSize: 13, color: COLORS.secondary, flex: 1 }} numberOfLines={1}>
+                  {restaurant.address} · {restaurant.distance}
                 </Text>
               </View>
 
-              {/* ชื่อร้าน */}
-              <Text style={{
-                fontSize: 22, fontWeight: '900', color: COLORS.dark,
-                textAlign: 'center', letterSpacing: -0.5, marginBottom: 6,
-              }}>
-                {result.name}
-              </Text>
+              {/* Description */}
+              {restaurant.description ? (
+                <Text style={{ fontSize: 13, color: COLORS.secondary, fontStyle: 'italic', marginTop: 6 }} numberOfLines={2}>
+                  {restaurant.description}
+                </Text>
+              ) : null}
 
-              {/* ระยะทาง + ราคา */}
-              <Text style={{ fontSize: 13, color: COLORS.secondary }}>
-                📍 {result.address} · {result.distance}
-              </Text>
+              {/* Action Buttons */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+                {/* Google Maps Button */}
+                <TouchableOpacity
+                  onPress={() => openGoogleMaps(restaurant)}
+                  style={{
+                    flex: 1,
+                    backgroundColor: '#4285F4',
+                    borderRadius: 12,
+                    paddingVertical: 12,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <MapPin size={15} color="#fff" />
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>เปิด Google Maps</Text>
+                </TouchableOpacity>
 
-              {/* loading dots */}
-              <View style={{ flexDirection: 'row', gap: 6, marginTop: 20 }}>
-                {[0, 1, 2].map(i => (
-                  <View key={i} style={{
-                    width: 6, height: 6, borderRadius: 3,
-                    backgroundColor: COLORS.primary, opacity: 0.4 + i * 0.3,
-                  }} />
-                ))}
+                {/* View Detail Button */}
+                <TouchableOpacity
+                  onPress={() => { onSelect(restaurant); navigate('result'); }}
+                  style={{
+                    paddingHorizontal: 16,
+                    borderRadius: 12,
+                    paddingVertical: 12,
+                    borderWidth: 1.5,
+                    borderColor: COLORS.border,
+                    backgroundColor: '#fff',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <ChevronRight size={18} color={COLORS.dark} />
+                </TouchableOpacity>
               </View>
-              <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 8 }}>
-                กำลังโหลดข้อมูล...
-              </Text>
-            </Animated.View>
+            </View>
           </View>
-        </View>
-      )}
-    </View>
+        ))}
+
+        {/* Spin Again Button */}
+        <TouchableOpacity
+          onPress={() => navigate('randomizer')}
+          style={{
+            backgroundColor: COLORS.primary,
+            borderRadius: 16,
+            paddingVertical: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            marginTop: 4,
+            shadowColor: COLORS.primary,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.35,
+            shadowRadius: 10,
+            elevation: 6,
+          }}
+          activeOpacity={0.85}
+        >
+          <RefreshCw size={20} color="#fff" />
+          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>สุ่มใหม่อีกครั้ง</Text>
+        </TouchableOpacity>
+      </Animated.ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -649,22 +831,6 @@ const Result: React.FC<{
   location: { lat: number; lng: number } | null;
 }> = ({ restaurant, navigate, onFavorite, favorites, location }) => {
   const isFav = favorites.some(f => f.id === restaurant.id);
-  
-  const handleNavigate = () => {
-    import('react-native').then(({ Linking, Platform }) => {
-      const scheme = Platform.select({ ios: 'maps:0,0?q=', android: 'geo:0,0?q=' });
-      const latLng = `${restaurant.location?.lat ?? 0},${restaurant.location?.lng ?? 0}`;
-      const label = encodeURIComponent(restaurant.name);
-      const url = Platform.select({
-        ios: `${scheme}${label}@${latLng}`,
-        android: `${scheme}${latLng}(${label})`
-      }) || `https://www.google.com/maps/search/?api=1&query=${latLng}`;
-
-      Linking.openURL(url).catch(() => {
-        Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${latLng}`);
-      });
-    });
-  };
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
@@ -704,7 +870,7 @@ const Result: React.FC<{
 
           {/* Action Buttons */}
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
-            <Button onPress={handleNavigate} style={{ flex: 1 }}>
+            <Button onPress={() => openGoogleMaps(restaurant)} style={{ flex: 1 }}>
               <Navigation size={16} color="#fff" style={{ marginRight: 6 }} />
               <Text style={{ color: '#fff', fontWeight: '700' }}>นำทาง</Text>
             </Button>
@@ -1052,7 +1218,7 @@ const SettingsView: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }
     { section: 'บัญชี', items: ['แก้ไขโปรไฟล์', 'การแจ้งเตือน', 'ความเป็นส่วนตัว'] },
     { section: 'การตั้งค่า', items: ['ข้อจำกัดอาหาร', 'งบประมาณเริ่มต้น'] },
   ];
-  
+
   const handleLogout = async () => {
     try {
       await AsyncStorage.removeItem('token');
@@ -1263,7 +1429,7 @@ const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => vo
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
-      
+
       {/* Header */}
       <View style={styles.homeHeader}>
         <TouchableOpacity onPress={() => navigate('result')} style={styles.iconBtn}>
@@ -1291,8 +1457,8 @@ const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => vo
           <Text style={[styles.inputLabel, { marginBottom: 12 }]}>⭐ คะแนนของคุณ</Text>
           <View style={{ flexDirection: 'row', gap: 12 }}>
             {[1, 2, 3, 4, 5].map(n => (
-              <TouchableOpacity 
-                key={n} 
+              <TouchableOpacity
+                key={n}
                 onPress={() => setRating(n)}
                 style={{
                   padding: 8,
@@ -1315,8 +1481,8 @@ const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => vo
         <View>
           <Text style={[styles.inputLabel, { marginBottom: 8 }]}>💬 ความคิดเห็น</Text>
           <TextInput
-            style={[styles.input, { 
-              height: 140, 
+            style={[styles.input, {
+              height: 140,
               textAlignVertical: 'top',
               borderColor: comment.trim() ? COLORS.primary : COLORS.border,
               borderWidth: comment.trim() ? 2 : 1,
@@ -1335,10 +1501,10 @@ const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => vo
         </View>
 
         {/* Submit Button */}
-        <Button 
-          onPress={handleSubmit} 
-          size="lg" 
-          style={{ marginTop: 28 }} 
+        <Button
+          onPress={handleSubmit}
+          size="lg"
+          style={{ marginTop: 28 }}
           disabled={loading || !comment.trim()}
         >
           {loading ? (
@@ -1353,7 +1519,7 @@ const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => vo
         </Button>
 
         {/* Cancel Link */}
-        <TouchableOpacity 
+        <TouchableOpacity
           onPress={() => navigate('result')}
           disabled={loading}
           style={{ marginTop: 12, alignItems: 'center' }}
@@ -1427,7 +1593,7 @@ export default function App() {
   const onSelect = async (r: Restaurant) => {
     setSelected(r);
     setHistory(prev => [r, ...prev.filter(p => p.id !== r.id).slice(0, 19)]);
-    
+
     try {
       const token = await AsyncStorage.getItem('token');
       if (token && r.id && !r.id.includes('temp') && !r.id.includes('api-id')) {
@@ -1437,7 +1603,7 @@ export default function App() {
           body: JSON.stringify({ restaurantId: r.id, action: 'viewed' })
         });
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const requestLocation = async () => {
@@ -1450,16 +1616,7 @@ export default function App() {
   };
 
   const handleRandomize = () => {
-    const pool = MOCK_RESTAURANTS.filter(r => {
-      const dist = parseFloat(r.distance);
-      const budgetOk = r.priceLevel <= randomConfig.maxBudget;
-      const distanceOk = dist <= randomConfig.maxDistance;
-      const categoryOk = randomConfig.categories.length === 0
-        || randomConfig.categories.includes(r.category);
-      return budgetOk && distanceOk && categoryOk;
-    });
-    const list = pool.length > 0 ? pool : MOCK_RESTAURANTS;
-    navigate('randomizer');
+    navigate('randomizer'); // Randomizer ดึงข้อมูลและ filter เองแล้ว
   };
 
   const toggleFavorite = async (r: Restaurant) => {
@@ -1474,7 +1631,7 @@ export default function App() {
           headers: { Authorization: `Bearer ${token}` }
         });
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   // ดึงข้อมูล History และ Favorites จาก Backend
@@ -1483,12 +1640,12 @@ export default function App() {
       try {
         const token = await AsyncStorage.getItem('token');
         if (!token) return;
-        
+
         const [resFav, resHist] = await Promise.all([
           fetch(`${API_URL}/users/me/favorites`, { headers: { Authorization: `Bearer ${token}` } }),
           fetch(`${API_URL}/users/me/history`, { headers: { Authorization: `Bearer ${token}` } })
         ]);
-        
+
         const mapToRestaurant = (f: any): Restaurant => ({
           id: f._id, name: f.name, rating: f.rating || 0, reviewCount: f.reviewCount || 0,
           priceLevel: f.priceLevel || 2, category: f.category || 'General',
@@ -1510,7 +1667,7 @@ export default function App() {
             .map(id => histRestaurants.find((r: any) => r.id === id));
           setHistory(uniqueHist as Restaurant[]);
         }
-      } catch (e) {}
+      } catch (e) { }
     };
 
     if (view === 'home' || view === 'profile') {
