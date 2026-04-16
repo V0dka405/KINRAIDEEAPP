@@ -171,8 +171,8 @@ const Login: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
       }
 
       await AsyncStorage.setItem('token', data.token);
-      Alert.alert('เข้าสู่ระบบสำเร็จ!', `ยินดีต้อนรับกลับมา, ${data.user.name}`);
-      navigate('home');
+      Alert.alert('WELLCOME', `WELLCOME BACK!, ${data.user.name}`);
+      navigate('random');
 
     } catch (error: any) {
       Alert.alert('เข้าสู่ระบบไม่สำเร็จ', error.message);
@@ -197,7 +197,7 @@ const Login: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
         <TextInput style={styles.input} placeholder="your@email.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
 
         <Text style={styles.inputLabel}>Password</Text>
-        <TextInput style={styles.input} placeholder="••••••••" value={password} onChangeText={setPassword} secureTextEntry />
+        <TextInput style={styles.input} placeholder="********" value={password} onChangeText={setPassword} secureTextEntry />
 
         <Button onPress={handleLogin} size="lg" style={{ marginTop: 20 }} disabled={loading}>
           {loading ? 'กำลังเข้าสู่ระบบ...' : 'Sign In'}
@@ -333,7 +333,7 @@ const Onboarding3: React.FC<{ navigate: (v: AppView) => void; budget: number; se
       </View>
     </View>
     <View style={{ padding: 32 }}>
-      <Button onPress={() => navigate('home')} size="lg">Let's Eat! 🍽</Button>
+      <Button onPress={() => navigate('randomizer')} size="lg">Let's Eat! 🍽</Button>
     </View>
   </SafeAreaView>
 );
