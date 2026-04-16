@@ -1,7 +1,7 @@
 # KINRAIDEEAPP
 
 ### Frontend
-add button post video and move heart fav to right side after name restaurant
+move favorite icon next to name and add video post button
 เหลือสิ่งที่ต้องแก้คือ หน้าHOME ,community ,video reels, Profile
 
 ### Backend
