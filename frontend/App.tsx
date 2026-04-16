@@ -270,7 +270,7 @@ const Signup: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
           {loading ? 'กำลังสมัคร...' : 'Create Account'}
         </Button>
 
-        <TouchableOpacity onPress={() => !loading && navigate('randomizer')} style={{ marginTop: 24, alignItems: 'center' }} disabled={loading}>
+        <TouchableOpacity onPress={() => !loading && navigate('login')} style={{ marginTop: 24, alignItems: 'center' }} disabled={loading}>
           <Text style={{ color: COLORS.secondary, fontSize: 14 }}>
             Already have an account? <Text style={{ color: COLORS.primary, fontWeight: '700' }}>Sign In</Text>
           </Text>
