@@ -270,7 +270,7 @@ const Signup: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
           {loading ? 'กำลังสมัคร...' : 'Create Account'}
         </Button>
 
-        <TouchableOpacity onPress={() => !loading && navigate('login')} style={{ marginTop: 24, alignItems: 'center' }} disabled={loading}>
+        <TouchableOpacity onPress={() => !loading && navigate('randomizer')} style={{ marginTop: 24, alignItems: 'center' }} disabled={loading}>
           <Text style={{ color: COLORS.secondary, fontSize: 14 }}>
             Already have an account? <Text style={{ color: COLORS.primary, fontWeight: '700' }}>Sign In</Text>
           </Text>
@@ -1295,9 +1295,111 @@ const Community: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) =
         </Card>
       ))}
     </ScrollView>
+
+    {/* ── ปุ่ม Post FAB ── */}
+    <TouchableOpacity
+      onPress={() => navigate('create-post')}
+      style={{
+        position: 'absolute',
+        bottom: 80,   // อยู่เหนือ BottomNav
+        right: 20,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: COLORS.primary,
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: COLORS.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.4,
+        shadowRadius: 10,
+        elevation: 8,
+      }}
+      activeOpacity={0.85}
+    >
+      <Plus size={28} color="#fff" />
+    </TouchableOpacity>
+
     <BottomNav current="community" navigate={navigate} />
   </SafeAreaView>
 );
+
+// ─── CreatePost ───────────────────────────────────────────────
+const CreatePost: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [tag, setTag] = useState('');
+
+  const handlePost = () => {
+    // TODO: เชื่อม backend POST /api/posts
+    Alert.alert('✅ โพสต์สำเร็จ', 'โพสต์ของคุณถูกบันทึกแล้ว (mock)');
+    navigate('community');
+  };
+
+  return (
+    <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+
+      {/* Header */}
+      <View style={styles.homeHeader}>
+        <TouchableOpacity onPress={() => navigate('community')} style={styles.iconBtn}>
+          <ChevronLeft size={24} color={COLORS.dark} />
+        </TouchableOpacity>
+        <Text style={{ fontSize: 20, fontWeight: '900', letterSpacing: -0.5, flex: 1, marginLeft: 12 }}>
+          สร้างโพสต์
+        </Text>
+        <TouchableOpacity
+          onPress={handlePost}
+          disabled={!title.trim() || !body.trim()}
+          style={{
+            backgroundColor: title.trim() && body.trim() ? COLORS.primary : COLORS.border,
+            borderRadius: 999,
+            paddingHorizontal: 18,
+            paddingVertical: 8,
+          }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>โพสต์</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 60 }} keyboardShouldPersistTaps="handled">
+        {/* Title */}
+        <Text style={styles.inputLabel}>หัวข้อ / ชื่อร้าน</Text>
+        <TextInput
+          style={[styles.input, { marginBottom: 16 }]}
+          placeholder="เช่น แนะนำร้านโดนใจในย่านสีลม"
+          value={title}
+          onChangeText={setTitle}
+          maxLength={100}
+        />
+
+        {/* Body */}
+        <Text style={styles.inputLabel}>เนื้อหา</Text>
+        <TextInput
+          style={[styles.input, { height: 160, textAlignVertical: 'top', marginBottom: 16 }]}
+          placeholder="แบ่งปันประสบการณ์หรือรีวิวของคุณ..."
+          value={body}
+          onChangeText={setBody}
+          multiline
+          maxLength={1000}
+        />
+        <Text style={{ fontSize: 12, color: COLORS.secondary, textAlign: 'right', marginTop: -12, marginBottom: 16 }}>
+          {body.length}/1000
+        </Text>
+
+        {/* Tag */}
+        <Text style={styles.inputLabel}>แท็ก (ไม่บังคับ)</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="เช่น ราคาถูก, อาหารไทย, ใกล้ BTS"
+          value={tag}
+          onChangeText={setTag}
+          maxLength={50}
+        />
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
 
 // ─── VideoFeed ────────────────────────────────────────────────
 const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => (
@@ -1681,18 +1783,6 @@ export default function App() {
       case 'splash': return <Splash onDone={() => navigate('login')} />;
       case 'login': return <Login navigate={navigate} />;
       case 'signup': return <Signup navigate={navigate} />;
-      case 'onboarding1': return <Onboarding1 navigate={navigate} />;
-      case 'onboarding2': return <Onboarding2 navigate={navigate} onLocation={requestLocation} />;
-      case 'onboarding3': return <Onboarding3 navigate={navigate} budget={budget} setBudget={setBudget} />;
-      case 'home': return (
-        <Home
-          navigate={navigate}
-          restaurants={MOCK_RESTAURANTS.filter(r => budget === 0 || r.priceLevel <= budget)}
-          onSelect={onSelect}
-          category={category}
-          setCategory={setCategory}
-        />
-      );
       case 'randomizer': return <Randomizer config={randomConfig} location={location} onSelect={onSelect} navigate={navigate} />;
       case 'random': return (
         <RandomView
@@ -1705,6 +1795,19 @@ export default function App() {
       case 'result': return selectedRestaurant
         ? <Result restaurant={selectedRestaurant} navigate={navigate} onFavorite={toggleFavorite} favorites={favorites} location={location} />
         : null;
+      case 'onboarding1': return <Onboarding1 navigate={navigate} />;
+      case 'onboarding2': return <Onboarding2 navigate={navigate} onLocation={requestLocation} />;
+      case 'onboarding3': return <Onboarding3 navigate={navigate} budget={budget} setBudget={setBudget} />;
+      case 'home': return (
+        <Home
+          navigate={navigate}
+          restaurants={MOCK_RESTAURANTS.filter(r => budget === 0 || r.priceLevel <= budget)}
+          onSelect={onSelect}
+          category={category}
+          setCategory={setCategory}
+        />
+      );
+      
       case 'map': return selectedRestaurant
         ? <MapViewScreen restaurant={selectedRestaurant} navigate={navigate} location={location} />
         : null;
@@ -1712,6 +1815,7 @@ export default function App() {
       case 'profile': return <Profile navigate={navigate} favorites={favorites} history={history} onSelect={onSelect} />;
       case 'settings': return <SettingsView navigate={navigate} />;
       case 'community': return <Community navigate={navigate} />;
+      case 'create-post': return <CreatePost navigate={navigate} />;
       case 'videos': return <VideoFeed navigate={navigate} />;
       case 'add-review': return selectedRestaurant ? <AddReview restaurant={selectedRestaurant} navigate={navigate} /> : null;
       case 'history': return <HistoryView navigate={navigate} history={history} onSelect={onSelect} />;
