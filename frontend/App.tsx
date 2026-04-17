@@ -1205,10 +1205,10 @@ const RandomView: React.FC<{
 const Profile: React.FC<{
   navigate: (v: AppView) => void;
   favorites: Restaurant[];
-  history: Restaurant[];
   onSelect: (r: Restaurant) => void;
+  reviewCount: number;
   user?: { id: string; name: string; email: string } | null;
-}> = ({ navigate, favorites, history, onSelect, user }) => (
+}> = ({ navigate, favorites, onSelect, user, reviewCount }) => (
   <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
       <View style={{ padding: 20 }}>
@@ -1224,9 +1224,8 @@ const Profile: React.FC<{
         {/* Stats */}
         <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
           {[
-            { label: 'รีวิว', count: 12 },
+            { label: 'รีวิว', count: reviewCount },
             { label: 'ร้านโปรด', count: favorites.length },
-            // { label: 'ประวัติ', count: history.length },
           ].map(({ label, count }) => (
             <Card key={label} style={{ flex: 1, alignItems: 'center' }}>
               <Text style={{ fontSize: 24, fontWeight: '900', color: COLORS.primary }}>{count}</Text>
@@ -2157,6 +2156,7 @@ export default function App() {
     maxDistance: 10,
     categories: [] as string[],
   });
+  const [reviewCount, setReviewCount] = useState(0);
   // ──── User State ────
   const [user, setUser] = useState<{ id: string; name: string; email: string } | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
@@ -2462,6 +2462,15 @@ export default function App() {
         // Load favorites
         await loadFavorites();
 
+        // Load review count
+        const resReviews = await fetch(`${API_URL}/users/me/review-count`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (resReviews.ok) {
+          const data = await resReviews.json();
+          setReviewCount(data.count);
+        }
+
         // Load history
         const resHist = await fetch(`${API_URL}/users/me/history`, { 
           headers: { Authorization: `Bearer ${token}` } 
@@ -2483,7 +2492,9 @@ export default function App() {
             .map(id => histRestaurants.find((r: any) => r.id === id));
           setHistory(uniqueHist as Restaurant[]);
         }
-      } catch (e) { }
+      } catch (e) {
+        console.error('Error loading user data:', e);
+      }
     };
 
     if (view === 'home' || view === 'profile') {
@@ -2531,7 +2542,7 @@ export default function App() {
         ? <MapViewScreen restaurant={selectedRestaurant} navigate={navigate} location={location} />
         : null;
       case 'menu': return selectedRestaurant ? <MenuView restaurant={selectedRestaurant} navigate={navigate} /> : null;
-      case 'profile': return <Profile navigate={navigate} favorites={favorites} history={history} onSelect={onSelect} user={user} />;
+      case 'profile': return <Profile navigate={navigate} favorites={favorites} onSelect={onSelect} user={user} reviewCount={reviewCount} />;
       case 'edit-profile': return <EditProfile navigate={navigate} user={user} setUser={setUser} />;
       case 'settings': return <SettingsView navigate={navigate} user={user} setUser={setUser} />;
       case 'community': return <Community navigate={navigate} user={user} />;
