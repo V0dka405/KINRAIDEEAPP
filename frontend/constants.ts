@@ -43,10 +43,10 @@ export const CATEGORIES = [
 ];
 
 export const BUDGETS = [
-  { label: '฿',     value: 1, desc: 'Under 100 THB' },
-  { label: '฿฿',   value: 2, desc: '100 - 300 THB' },
-  { label: '฿฿฿',  value: 3, desc: '300 - 800 THB' },
-  { label: '฿฿฿฿', value: 4, desc: '800+ THB' },
+  { label: 'ต่ำกว่า 100 บาท',     value: 1, desc: 'Under 100 THB' },
+  { label: '1-3 ร้อยบาท',   value: 2, desc: '100 - 300 THB' },
+  { label: '3-8 ร้อยบาท',  value: 3, desc: '300 - 800 THB' },
+  { label: '800 บาทขึ้นไป', value: 4, desc: '800+ THB' },
 ];
 
 export const COLORS = {
