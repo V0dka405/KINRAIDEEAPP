@@ -679,8 +679,14 @@ const Randomizer: React.FC<{
   // ดึงข้อมูลจาก Backend
   useEffect(() => {
     let isMounted = true;
-    const resultLimit = 2;
+    const resultLimit = 5;
     abortControllerRef.current = new AbortController();
+
+    // Reset states for fresh randomization
+    setIsLoading(true);
+    setProgress(0);
+    setNotFound(false);
+    setIsCancelled(false);
 
     const fetchRandom = async () => {
       try {
@@ -822,7 +828,7 @@ const Randomizer: React.FC<{
       isMounted = false;
       abortControllerRef.current?.abort();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config, location]); // Re-run when config or location changes
 
   // Animate list เข้ามาเมื่อโหลดเสร็จ
   useEffect(() => {
@@ -896,7 +902,7 @@ const Randomizer: React.FC<{
           ไม่พบร้านในทุกระยะทางสำหรับหมวดหมู่ที่เลือก
         </Text>
         <TouchableOpacity
-          onPress={() => navigate('random')}
+          onPress={() => navigate('randomizer')}
           style={{ backgroundColor: COLORS.primary, borderRadius: 999, paddingVertical: 14, paddingHorizontal: 32 }}
         >
           <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>กรุณาเลือกหมวดหมู่อื่น</Text>
@@ -923,12 +929,7 @@ const Randomizer: React.FC<{
             พบ {results.length} ร้านแนะนำสำหรับคุณ
           </Text>
         </View>
-        <TouchableOpacity
-          onPress={() => navigate('randomizer')}
-          style={[styles.iconBtn, { backgroundColor: `${COLORS.primary}15`, borderColor: COLORS.primary }]}
-        >
-          <RefreshCw size={18} color={COLORS.primary} />
-        </TouchableOpacity>
+        
       </View>
 
       {/* Restaurant List */}
@@ -1056,29 +1057,6 @@ const Randomizer: React.FC<{
           </View>
         ))}
 
-        {/* Spin Again Button */}
-        <TouchableOpacity
-          onPress={() => navigate('randomizer')}
-          style={{
-            backgroundColor: COLORS.primary,
-            borderRadius: 16,
-            paddingVertical: 16,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-            marginTop: 4,
-            shadowColor: COLORS.primary,
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.35,
-            shadowRadius: 10,
-            elevation: 6,
-          }}
-          activeOpacity={0.85}
-        >
-          <RefreshCw size={20} color="#fff" />
-          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>สุ่มใหม่อีกครั้ง</Text>
-        </TouchableOpacity>
       </Animated.ScrollView>
     </SafeAreaView>
   );

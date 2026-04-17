@@ -50,6 +50,7 @@ export const Button: React.FC<ButtonProps> = ({
       style={[...btnStyle, style]}
       disabled={disabled || loading}
       activeOpacity={0.8}
+      touchSoundDisabled={true}
     >
       {loading
         ? <ActivityIndicator color={variant === 'primary' ? '#fff' : COLORS.primary} />
