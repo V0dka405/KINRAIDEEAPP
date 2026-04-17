@@ -349,10 +349,143 @@ const Home: React.FC<{
   setCategory: (c: string) => void;
 }> = ({ navigate, restaurants, onSelect, category, setCategory }) => {
   const [search, setSearch] = useState('');
-  const filtered = restaurants.filter(r =>
-    (category === 'All' || r.category === category) &&
-    (r.name.toLowerCase().includes(search.toLowerCase()) || r.address.toLowerCase().includes(search.toLowerCase()))
-  );
+  const [selectedBudget, setSelectedBudget] = useState(4);
+  const [selectedDistance, setSelectedDistance] = useState(10);
+  const [showFilters, setShowFilters] = useState(false);
+  const [nearbyRestaurants, setNearbyRestaurants] = useState<Restaurant[]>([]);
+  const [nearbyLoading, setNearbyLoading] = useState(true);
+  const [allRestaurants, setAllRestaurants] = useState<Restaurant[]>([]);
+  const [allRestaurantsLoading, setAllRestaurantsLoading] = useState(false);
+  const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+
+  // Fetch nearby restaurants (2km)
+  useEffect(() => {
+    const fetchNearby = async () => {
+      try {
+        setNearbyLoading(true);
+        // Get location
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setNearbyLoading(false);
+          return;
+        }
+
+        const pos = await Location.getCurrentPositionAsync({});
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setLocation({ lat, lng });
+
+        // Fetch from API with 2km radius
+        const queryParams = new URLSearchParams({
+          lat: lat.toString(),
+          lng: lng.toString(),
+          radius: '2000', // 2km
+          limit: '10',
+        });
+
+        const response = await fetch(`${API_URL}/restaurants?${queryParams}`);
+        const data = await response.json();
+
+        if (data.restaurants && data.restaurants.length > 0) {
+          const mapped: Restaurant[] = data.restaurants.map((r: any, idx: number) => ({
+            id: r._id || `nearby-${idx}`,
+            name: r.name,
+            rating: r.rating || 0,
+            reviewCount: r.reviewCount || 0,
+            priceLevel: r.priceLevel || 2,
+            category: r.category || 'General',
+            address: r.address || '',
+            distance: r.distance || 'ใกล้คุณ',
+            imageUrl: r.imageUrl || `https://picsum.photos/seed/${idx}/800/600`,
+            description: r.description || '',
+            location: {
+              lat: r.location?.coordinates[1] || lat,
+              lng: r.location?.coordinates[0] || lng,
+            },
+            reviews: [],
+            videoReviews: [],
+            menu: [],
+          }));
+          setNearbyRestaurants(mapped);
+        }
+      } catch (e) {
+        console.error('Error fetching nearby:', e);
+      } finally {
+        setNearbyLoading(false);
+      }
+    };
+
+    fetchNearby();
+  }, []);
+
+  // Fetch all restaurants based on filters
+  useEffect(() => {
+    const fetchAllRestaurants = async () => {
+      try {
+        setAllRestaurantsLoading(true);
+        
+        if (!location) return;
+
+        // Build query params with filters
+        const queryParams = new URLSearchParams({
+          lat: location.lat.toString(),
+          lng: location.lng.toString(),
+          radius: (selectedDistance * 1000).toString(),
+          limit: '100',
+        });
+
+        // Add category if not "All"
+        if (category !== 'All') {
+          queryParams.append('category', category);
+        }
+
+        const response = await fetch(`${API_URL}/restaurants?${queryParams}`);
+        const data = await response.json();
+
+        if (data.restaurants && data.restaurants.length > 0) {
+          const mapped: Restaurant[] = data.restaurants
+            .filter((r: any) => {
+              // Apply budget filter
+              const budgetOk = r.priceLevel <= selectedBudget;
+              // Apply search filter
+              const searchOk = !search.trim() || 
+                r.name.toLowerCase().includes(search.toLowerCase()) || 
+                r.address.toLowerCase().includes(search.toLowerCase());
+              return budgetOk && searchOk;
+            })
+            .map((r: any, idx: number) => ({
+              id: r._id || `all-${idx}`,
+              name: r.name,
+              rating: r.rating || 0,
+              reviewCount: r.reviewCount || 0,
+              priceLevel: r.priceLevel || 2,
+              category: r.category || 'General',
+              address: r.address || '',
+              distance: r.distance || 'ใกล้คุณ',
+              imageUrl: r.imageUrl || `https://picsum.photos/seed/${idx}/800/600`,
+              description: r.description || '',
+              location: {
+                lat: r.location?.coordinates[1] || location.lat,
+                lng: r.location?.coordinates[0] || location.lng,
+              },
+              reviews: [],
+              videoReviews: [],
+              menu: [],
+            }));
+          setAllRestaurants(mapped);
+        } else {
+          setAllRestaurants([]);
+        }
+      } catch (e) {
+        console.error('Error fetching all restaurants:', e);
+        setAllRestaurants([]);
+      } finally {
+        setAllRestaurantsLoading(false);
+      }
+    };
+
+    fetchAllRestaurants();
+  }, [selectedBudget, selectedDistance, category, search, location]);
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
@@ -379,10 +512,49 @@ const Home: React.FC<{
             onChangeText={setSearch}
           />
         </View>
-        <TouchableOpacity style={styles.filterBtn} onPress={() => navigate('budget')}>
+        <TouchableOpacity style={styles.filterBtn} onPress={() => setShowFilters(!showFilters)}>
           <Filter size={18} color={COLORS.primary} />
         </TouchableOpacity>
       </View>
+
+      {/* Filter Panel */}
+      {showFilters && (
+        <View style={{ backgroundColor: '#fff', borderBottomWidth: 1, borderColor: COLORS.border, padding: 16 }}>
+          <View style={{ marginBottom: 16 }}>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.secondary, marginBottom: 8 }}>งบประมาณ (บาท)</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {BUDGETS.map(b => (
+                <TouchableOpacity
+                  key={b.value}
+                  onPress={() => setSelectedBudget(b.value)}
+                  style={[styles.filterChip, selectedBudget === b.value && styles.filterChipActive]}
+                >
+                  <Text style={[{ fontWeight: '600', fontSize: 12, color: COLORS.dark }, selectedBudget === b.value && { color: '#fff' }]}>
+                    {b.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.secondary, marginBottom: 8 }}>ระยะทาง (km)</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {[1, 2, 5, 10, 20].map(d => (
+                <TouchableOpacity
+                  key={d}
+                  onPress={() => setSelectedDistance(d)}
+                  style={[styles.filterChip, selectedDistance === d && styles.filterChipActive]}
+                >
+                  <Text style={[{ fontWeight: '600', fontSize: 12, color: COLORS.dark }, selectedDistance === d && { color: '#fff' }]}>
+                    {d} km
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+      )}
 
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Categories */}
@@ -394,24 +566,42 @@ const Home: React.FC<{
           ))}
         </ScrollView>
 
-        {/* Featured */}
+        {/* Featured - Near Me (2km) */}
         <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
           <SectionHeader title="ร้านใกล้ฉัน" subtitle="ร้านอาหารภายใน 2 km"/>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {filtered.slice(0, 5).map(r => (
-              <RestaurantCard key={r.id} item={r} horizontal onPress={() => { onSelect(r); navigate('result'); }} />
-            ))}
-          </ScrollView>
+          {nearbyLoading ? (
+            <Text style={{ color: COLORS.secondary, textAlign: 'center', paddingVertical: 16 }}>กำลังโหลด...</Text>
+          ) : nearbyRestaurants.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {nearbyRestaurants.slice(0, 5).map(r => (
+                <RestaurantCard key={r.id} item={r} horizontal onPress={() => { onSelect(r); navigate('result'); }} />
+              ))}
+            </ScrollView>
+          ) : (
+            <Text style={{ color: COLORS.secondary, textAlign: 'center', paddingVertical: 16, fontSize: 13 }}>ไม่พบร้านในบริเวณใกล้</Text>
+          )}
         </View>
 
         {/* All Restaurants */}
         <View style={{ paddingHorizontal: 20, marginTop: 24, paddingBottom: 100 }}>
-          <SectionHeader title="ร้านทั้งหมด" />
-          {filtered.map(r => (
-            <View key={r.id} style={{ marginBottom: 12 }}>
-              <RestaurantCard item={r} onPress={() => { onSelect(r); navigate('result'); }} />
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.dark }}>ร้านทั้งหมด</Text>
+            <Text style={{ fontSize: 12, color: COLORS.secondary }}>พบ {allRestaurants.length} ร้าน</Text>
+          </View>
+          {allRestaurantsLoading ? (
+            <Text style={{ color: COLORS.secondary, textAlign: 'center', paddingVertical: 16 }}>กำลังโหลด...</Text>
+          ) : allRestaurants.length > 0 ? (
+            allRestaurants.map(r => (
+              <View key={r.id} style={{ marginBottom: 12 }}>
+                <RestaurantCard item={r} onPress={() => { onSelect(r); navigate('result'); }} />
+              </View>
+            ))
+          ) : (
+            <View style={{ padding: 24, alignItems: 'center', backgroundColor: '#f8f9fa', borderRadius: 16, borderWidth: 1, borderColor: COLORS.border }}>
+              <Text style={{ color: COLORS.secondary, textAlign: 'center' }}>ไม่พบร้านตามเงื่อนไข</Text>
+              <Text style={{ color: COLORS.secondary, fontSize: 12, marginTop: 4 }}>ลองเปลี่ยนตัวกรองใหม่</Text>
             </View>
-          ))}
+          )}
         </View>
       </ScrollView>
 
@@ -468,6 +658,9 @@ const Randomizer: React.FC<{
 }> = ({ config, location, onSelect, navigate }) => {
   const spin = useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
+  const [progress, setProgress] = useState(0);
+  const [isCancelled, setIsCancelled] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [results, setResults] = useState<Restaurant[]>([]);
   const [statusMsg, setStatusMsg] = useState('หาร้านอร่อยในบริเวณใกล้คุณ');
   const [notFound, setNotFound] = useState(false);
@@ -487,6 +680,7 @@ const Randomizer: React.FC<{
   useEffect(() => {
     let isMounted = true;
     const resultLimit = 2;
+    abortControllerRef.current = new AbortController();
 
     const fetchRandom = async () => {
       try {
@@ -497,18 +691,26 @@ const Randomizer: React.FC<{
           category = config.categories[randomIndex];
         } else {
           // ถ้าไม่ได้เลือกหมวดหมู่ ให้สุ่มจาก API
-          const resCategory = await fetch(`${API_URL}/restaurants/random-category`);
+          if (isCancelled) return;
+          setProgress(10);
+          const resCategory = await fetch(`${API_URL}/restaurants/random-category`, {
+            signal: abortControllerRef.current?.signal
+          });
           const dataCategory = await resCategory.json();
           category = dataCategory.category;
+          setProgress(20);
         }
 
         let currentLoc = location;
         if (!currentLoc) {
+          if (isCancelled) return;
+          setProgress(30);
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status === 'granted') {
             const pos = await Location.getCurrentPositionAsync({});
             currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           }
+          setProgress(40);
         }
 
         if (currentLoc) {
@@ -518,8 +720,13 @@ const Randomizer: React.FC<{
             ...[5, 10].filter(r => r > config.maxDistance),
           ];
 
-          for (const radius of radiusSteps) {
-            if (!isMounted) return;
+          for (let stepIdx = 0; stepIdx < radiusSteps.length; stepIdx++) {
+            if (!isMounted || isCancelled) return;
+            const radius = radiusSteps[stepIdx];
+
+            // Update progress
+            const progressPerStep = (60 - 40) / radiusSteps.length;
+            setProgress(40 + progressPerStep * (stepIdx + 1));
 
             if (radius > config.maxDistance) {
               setStatusMsg(`ไม่พบร้านในระยะ ${radiusSteps[radiusSteps.indexOf(radius) - 1]} km กำลังขยายระยะเป็น ${radius} km...`);
@@ -533,7 +740,9 @@ const Randomizer: React.FC<{
               limit: resultLimit.toString(),
             });
 
-            const resRestaurants = await fetch(`${API_URL}/restaurants?${queryParams}`);
+            const resRestaurants = await fetch(`${API_URL}/restaurants?${queryParams}`, {
+              signal: abortControllerRef.current?.signal
+            });
             const dataRestaurants = await resRestaurants.json();
 
             if (dataRestaurants.restaurants && dataRestaurants.restaurants.length > 0) {
@@ -554,14 +763,25 @@ const Randomizer: React.FC<{
                 },
                 reviews: [], videoReviews: [], menu: [],
               }));
-              if (isMounted) { setResults(mapped); setIsLoading(false); }
+              if (isMounted) { 
+                setProgress(100);
+                setResults(mapped); 
+                setIsLoading(false); 
+              }
               return;
             }
           }
         }
         throw new Error('No nearby restaurants');
-      } catch {
-        if (isMounted) { fallbackMock(); }
+      } catch (error: any) {
+        if (error.name === 'AbortError') {
+          console.log('Fetch cancelled');
+          return;
+        }
+        if (isMounted) { 
+          setProgress(100);
+          fallbackMock(); 
+        }
       }
     };
 
@@ -598,7 +818,10 @@ const Randomizer: React.FC<{
     };
 
     fetchRandom();
-    return () => { isMounted = false; };
+    return () => { 
+      isMounted = false;
+      abortControllerRef.current?.abort();
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Animate list เข้ามาเมื่อโหลดเสร็จ
@@ -628,6 +851,35 @@ const Randomizer: React.FC<{
         <Text style={{ fontSize: 14, color: COLORS.secondary, marginTop: 8, fontStyle: 'italic', textAlign: 'center', paddingHorizontal: 32 }}>
           {statusMsg}
         </Text>
+        
+        {/* Progress Bar */}
+        <View style={{ marginTop: 40, width: '80%', maxWidth: 300 }}>
+          <View style={{ height: 8, backgroundColor: `${COLORS.primary}20`, borderRadius: 4, overflow: 'hidden' }}>
+            <View 
+              style={{ 
+                height: '100%', 
+                backgroundColor: COLORS.primary, 
+                width: `${progress}%`,
+                borderRadius: 4,
+              }} 
+            />
+          </View>
+          <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 8, textAlign: 'center', fontWeight: '600' }}>
+            {progress}%
+          </Text>
+        </View>
+
+        {/* Cancel Button */}
+        <TouchableOpacity
+          onPress={() => {
+            setIsCancelled(true);
+            abortControllerRef.current?.abort();
+            navigate('random');
+          }}
+          style={{ marginTop: 32, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.secondary }}
+        >
+          <Text style={{ color: COLORS.secondary, fontWeight: '700', fontSize: 14 }}>ยกเลิก</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -2601,6 +2853,8 @@ const styles = StyleSheet.create({
   catChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, backgroundColor: '#fff', marginRight: 8, borderWidth: 1, borderColor: COLORS.border },
   catChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
   catChipText: { fontSize: 13, fontWeight: '600', color: COLORS.dark },
+  filterChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: COLORS.border },
+  filterChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
 
   // ── Nav ──
   nav: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', borderTopWidth: 1, borderColor: COLORS.border, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingBottom: Platform.OS === 'ios' ? 20 : 8, paddingTop: 12 },
