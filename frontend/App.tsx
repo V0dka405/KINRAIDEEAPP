@@ -1633,7 +1633,7 @@ const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => vo
   );
 };
 
-// ─── NearbyRestaurants ─────────────────────────────────────────────
+// ─── NearbyRestaurants ───────────────────────────────────────
 
 // ─── HistoryView ─────────────────────────────────────────────
 const HistoryView: React.FC<{
@@ -1662,6 +1662,7 @@ const HistoryView: React.FC<{
 // ============================================================
 // App Root
 // ============================================================
+
 export default function App() {
   const [view, setView] = useState<AppView>('splash');
   const [selectedRestaurant, setSelected] = useState<Restaurant | null>(null);
