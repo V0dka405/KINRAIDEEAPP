@@ -14,7 +14,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, Image, TouchableOpacity, ScrollView,
   StyleSheet, FlatList, Dimensions, Animated, Alert,
-  SafeAreaView, StatusBar, Platform,
+  SafeAreaView, StatusBar, Platform, Modal,
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -396,7 +396,7 @@ const Home: React.FC<{
 
         {/* Featured */}
         <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
-          <SectionHeader title="แนะนำวันนี้" subtitle="เลือกมาเพื่อคุณโดยเฉพาะ" onPress={() => { }} actionLabel="ดูทั้งหมด" />
+          <SectionHeader title="ร้านใกล้ฉัน" subtitle="ร้านอาหารภายใน 2 km"/>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {filtered.slice(0, 5).map(r => (
               <RestaurantCard key={r.id} item={r} horizontal onPress={() => { onSelect(r); navigate('result'); }} />
@@ -486,6 +486,7 @@ const Randomizer: React.FC<{
   // ดึงข้อมูลจาก Backend
   useEffect(() => {
     let isMounted = true;
+    const resultLimit = 2;
 
     const fetchRandom = async () => {
       try {
@@ -514,7 +515,7 @@ const Randomizer: React.FC<{
           // ✅ ลองขยายระยะทีละขั้น
           const radiusSteps = [
             config.maxDistance,
-            ...[5, 10, 20].filter(r => r > config.maxDistance),
+            ...[5, 10].filter(r => r > config.maxDistance),
           ];
 
           for (const radius of radiusSteps) {
@@ -529,7 +530,7 @@ const Randomizer: React.FC<{
               lng: currentLoc.lng.toString(),
               category,
               radius: (radius * 1000).toString(),
-              limit: '5',
+              limit: resultLimit.toString(),
             });
 
             const resRestaurants = await fetch(`${API_URL}/restaurants?${queryParams}`);
@@ -583,7 +584,7 @@ const Randomizer: React.FC<{
           if (radius > config.maxDistance) {
             setStatusMsg(`ไม่พบร้านในระยะ ${config.maxDistance} km พบร้านในระยะ ${radius} km แทน`);
           }
-          const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, 5);
+          const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, resultLimit);
           setResults(shuffled);
           setIsLoading(false);
           return;
@@ -874,9 +875,7 @@ const Result: React.FC<{
           <ChevronLeft size={24} color={COLORS.dark} />
         </TouchableOpacity>
         <Text style={styles.resultTag}>{restaurant.category}</Text>
-        <TouchableOpacity onPress={() => onFavorite(restaurant)} style={styles.iconBtn}>
-          <Heart size={22} color={isFav ? COLORS.primary : COLORS.secondary} fill={isFav ? COLORS.primary : 'none'} />
-        </TouchableOpacity>
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -884,8 +883,16 @@ const Result: React.FC<{
         <Image source={{ uri: restaurant.imageUrl }} style={styles.heroImage} />
 
         <View style={{ padding: 20 }}>
-          {/* Name & Rating */}
-          <Text style={styles.heroName}>{restaurant.name}</Text>
+          {/* Name & Favorite Button */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <Text style={[styles.heroName, { flex: 1 }]}>{restaurant.name}</Text>
+            <TouchableOpacity 
+              onPress={() => onFavorite(restaurant)} 
+              style={[styles.iconBtn, { marginTop: -2 }]}
+            >
+              <Heart size={30} color={isFav ? COLORS.primary : COLORS.secondary} fill={isFav ? COLORS.primary : 'none'} />
+            </TouchableOpacity>
+          </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 6 }}>
             <StarRating rating={restaurant.rating} size={14} />
             <Text style={{ color: COLORS.secondary, fontSize: 13 }}>({restaurant.reviewCount.toLocaleString()} รีวิว)</Text>
@@ -1219,7 +1226,7 @@ const Profile: React.FC<{
           {[
             { label: 'รีวิว', count: 12 },
             { label: 'ร้านโปรด', count: favorites.length },
-            { label: 'ประวัติ', count: history.length },
+            // { label: 'ประวัติ', count: history.length },
           ].map(({ label, count }) => (
             <Card key={label} style={{ flex: 1, alignItems: 'center' }}>
               <Text style={{ fontSize: 24, fontWeight: '900', color: COLORS.primary }}>{count}</Text>
@@ -1715,32 +1722,184 @@ const CreatePost: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) 
 };
 
 // ─── VideoFeed ────────────────────────────────────────────────
-const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => (
-  <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
-    <View style={{ padding: 20 }}>
-      <Text style={styles.homeTitle}>FOOD REELS</Text>
-    </View>
-    <FlatList
-      data={MOCK_RESTAURANTS.slice(0, 6)}
-      keyExtractor={i => i.id}
-      numColumns={2}
-      contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 100 }}
-      columnWrapperStyle={{ gap: 8 }}
-      renderItem={({ item }) => (
-        <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
-          <Image source={{ uri: item.imageUrl }} style={StyleSheet.absoluteFillObject} />
-          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
-            <Play size={32} color="#fff" fill="#fff" />
+const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
+  const [showModal, setShowModal] = useState(false);
+
+  return (
+    <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+      <View style={{ padding: 20 }}>
+        <Text style={styles.homeTitle}>FOOD REELS</Text>
+      </View>
+
+      <FlatList
+        data={MOCK_RESTAURANTS.slice(0, 6)}
+        keyExtractor={i => i.id}
+        numColumns={2}
+        contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 100 }}
+        columnWrapperStyle={{ gap: 8 }}
+        renderItem={({ item }) => (
+          <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
+            <Image source={{ uri: item.imageUrl }} style={StyleSheet.absoluteFillObject} />
+            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
+              <Play size={32} color="#fff" fill="#fff" />
+            </View>
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 10 }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }} numberOfLines={1}>{item.name}</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+      />
+
+      {/* ── ปุ่ม Post Video FAB ── */}
+      <TouchableOpacity
+        onPress={() => setShowModal(true)}
+        style={{
+          position: 'absolute',
+          bottom: 80,   // อยู่เหนือ BottomNav
+          right: 20,
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          backgroundColor: COLORS.primary,
+          justifyContent: 'center',
+          alignItems: 'center',
+          shadowColor: COLORS.primary,
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.4,
+          shadowRadius: 10,
+          elevation: 8,
+        }}
+        activeOpacity={0.85}
+      >
+        <Plus size={28} color="#fff" />
+      </TouchableOpacity>
+
+      {/* Modal for Post Video */}
+      <Modal
+        visible={showModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            paddingHorizontal: 20,
+            paddingVertical: 32,
+            paddingBottom: Platform.OS === 'ios' ? 40 : 32,
+          }}>
+            {/* Header */}
+            <View style={{ marginBottom: 24 }}>
+              <Text style={{ fontSize: 24, fontWeight: '900', color: COLORS.dark, letterSpacing: -0.5, marginBottom: 8 }}>
+                📹 สร้างวิดีโอใหม่
+              </Text>
+              <Text style={{ fontSize: 14, color: COLORS.secondary }}>
+                เลือกวิธีการเพิ่มวิดีโอของคุณ
+              </Text>
+            </View>
+
+            {/* Options */}
+            <TouchableOpacity
+              onPress={() => {
+                setShowModal(false);
+                Alert.alert('📱 เลือกจากแกลเลอรี่', 'คุณลิคจะเลือกวิดีโอจากแกลเลอรี่');
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: `${COLORS.primary}10`,
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 12,
+                borderWidth: 1,
+                borderColor: COLORS.primary,
+              }}
+            >
+              <View style={{ 
+                width: 48, 
+                height: 48, 
+                borderRadius: 12, 
+                backgroundColor: COLORS.primary, 
+                justifyContent: 'center', 
+                alignItems: 'center',
+                marginRight: 12
+              }}>
+                <Video size={24} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.dark }}>
+                  เลือกจากแกลเลอรี่
+                </Text>
+                <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 4 }}>
+                  อัปโหลดวิดีโอที่มีอยู่
+                </Text>
+              </View>
+              <ChevronRight size={20} color={COLORS.primary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => {
+                setShowModal(false);
+                Alert.alert('📹 ถ่ายวิดีโอใหม่', 'ระบบกำลังเปิดกล้อง');
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#fff',
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 16,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+              }}
+            >
+              <View style={{ 
+                width: 48, 
+                height: 48, 
+                borderRadius: 12, 
+                backgroundColor: COLORS.secondary, 
+                justifyContent: 'center', 
+                alignItems: 'center',
+                marginRight: 12,
+                opacity: 0.2
+              }}>
+                <Video size={24} color={COLORS.secondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.dark }}>
+                  ถ่ายวิดีโอใหม่
+                </Text>
+                <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 4 }}>
+                  ถ่ายวิดีโอด้วยกล้องของคุณ
+                </Text>
+              </View>
+              <ChevronRight size={20} color={COLORS.secondary} />
+            </TouchableOpacity>
+
+            {/* Cancel Button */}
+            <TouchableOpacity
+              onPress={() => setShowModal(false)}
+              style={{
+                paddingVertical: 14,
+                paddingHorizontal: 20,
+                borderRadius: 12,
+                backgroundColor: COLORS.bg,
+              }}
+            >
+              <Text style={{ fontSize: 16, fontWeight: '600', color: COLORS.secondary, textAlign: 'center' }}>
+                ยกเลิก
+              </Text>
+            </TouchableOpacity>
           </View>
-          <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 10 }}>
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }} numberOfLines={1}>{item.name}</Text>
-          </View>
-        </TouchableOpacity>
-      )}
-    />
-    <BottomNav current="videos" navigate={navigate} />
-  </SafeAreaView>
-);
+        </View>
+      </Modal>
+
+      <BottomNav current="videos" navigate={navigate} />
+    </SafeAreaView>
+  );
+};
 
 // ─── AddReview (FIXED) ────────────────────────────────────────────────
 const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => void }> = ({ restaurant, navigate }) => {
@@ -2445,7 +2604,7 @@ const styles = StyleSheet.create({
   cardName: { fontSize: 15, fontWeight: '700', color: COLORS.dark },
   cardAddr: { fontSize: 12, color: COLORS.secondary, marginTop: 2 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
-  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+  iconBtn: { width: 50 , height: 50, borderRadius: 40, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
 
   // ── Result ──
   resultHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
