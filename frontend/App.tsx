@@ -14,7 +14,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, Image, TouchableOpacity, ScrollView,
   StyleSheet, FlatList, Dimensions, Animated, Alert,
-  SafeAreaView, StatusBar, Platform,
+  SafeAreaView, StatusBar, Platform, Modal,
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -22,7 +22,7 @@ import {
   Utensils, MapPin, Search, User, Heart, History,
   Settings, Bell, ChevronLeft, Star, MessageSquare,
   Video, Plus, Share2, Navigation, Filter, RefreshCw,
-  Dice5, Users, Menu, Play, ChevronRight, Phone,
+  Dice5, Users, Menu, Play, ChevronRight, Phone, Trash2
 } from 'lucide-react-native';
 
 import { View as AppView, Restaurant } from './types';
@@ -171,6 +171,7 @@ const Login: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
       }
 
       await AsyncStorage.setItem('token', data.token);
+      await AsyncStorage.setItem('user', JSON.stringify(data.user));
       Alert.alert('WELLCOME', `WELLCOME BACK!, ${data.user.name}`);
       navigate('random');
 
@@ -240,6 +241,7 @@ const Signup: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
       }
 
       await AsyncStorage.setItem('token', data.token);
+      await AsyncStorage.setItem('user', JSON.stringify(data.user));
       Alert.alert('สมัครสำเร็จ!', 'ยินดีต้อนรับสู่ Kin-Rai-Dee!');
       navigate('onboarding1');
 
@@ -394,7 +396,7 @@ const Home: React.FC<{
 
         {/* Featured */}
         <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
-          <SectionHeader title="แนะนำวันนี้" subtitle="เลือกมาเพื่อคุณโดยเฉพาะ" onPress={() => { }} actionLabel="ดูทั้งหมด" />
+          <SectionHeader title="ร้านใกล้ฉัน" subtitle="ร้านอาหารภายใน 2 km"/>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {filtered.slice(0, 5).map(r => (
               <RestaurantCard key={r.id} item={r} horizontal onPress={() => { onSelect(r); navigate('result'); }} />
@@ -428,7 +430,6 @@ const CATEGORY_EMOJI: Record<string, string> = {
   'Korean': '🥘',
   'Western': '🍔',
   'Dessert': '🍰',
-  'ก๋วยเตี๋ยว': '🍜',
 };
 
 const openGoogleMaps = (restaurant: Restaurant) => {
@@ -485,12 +486,21 @@ const Randomizer: React.FC<{
   // ดึงข้อมูลจาก Backend
   useEffect(() => {
     let isMounted = true;
+    const resultLimit = 2;
 
     const fetchRandom = async () => {
       try {
-        const resCategory = await fetch(`${API_URL}/restaurants/random-category`);
-        const dataCategory = await resCategory.json();
-        const category = dataCategory.category;
+        let category;
+        if (config.categories && config.categories.length > 0) {
+          // สุ่มจากหมวดหมู่ที่ผู้ใช้เลือกมา
+          const randomIndex = Math.floor(Math.random() * config.categories.length);
+          category = config.categories[randomIndex];
+        } else {
+          // ถ้าไม่ได้เลือกหมวดหมู่ ให้สุ่มจาก API
+          const resCategory = await fetch(`${API_URL}/restaurants/random-category`);
+          const dataCategory = await resCategory.json();
+          category = dataCategory.category;
+        }
 
         let currentLoc = location;
         if (!currentLoc) {
@@ -505,7 +515,7 @@ const Randomizer: React.FC<{
           // ✅ ลองขยายระยะทีละขั้น
           const radiusSteps = [
             config.maxDistance,
-            ...[5, 10, 20].filter(r => r > config.maxDistance),
+            ...[5, 10].filter(r => r > config.maxDistance),
           ];
 
           for (const radius of radiusSteps) {
@@ -520,7 +530,7 @@ const Randomizer: React.FC<{
               lng: currentLoc.lng.toString(),
               category,
               radius: (radius * 1000).toString(),
-              limit: '5',
+              limit: resultLimit.toString(),
             });
 
             const resRestaurants = await fetch(`${API_URL}/restaurants?${queryParams}`);
@@ -574,7 +584,7 @@ const Randomizer: React.FC<{
           if (radius > config.maxDistance) {
             setStatusMsg(`ไม่พบร้านในระยะ ${config.maxDistance} km พบร้านในระยะ ${radius} km แทน`);
           }
-          const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, 5);
+          const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, resultLimit);
           setResults(shuffled);
           setIsLoading(false);
           return;
@@ -831,6 +841,30 @@ const Result: React.FC<{
   location: { lat: number; lng: number } | null;
 }> = ({ restaurant, navigate, onFavorite, favorites, location }) => {
   const isFav = favorites.some(f => f.id === restaurant.id);
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(false);
+
+  useEffect(() => {
+    const fetchReviews = async () => {
+      // ข้ามการดึงรีวิวถ้าร้านอาหารยังไม่ได้เซฟลงฐานข้อมูลจริง (มี id เป็น temp หรือ API-generated)
+      if (!restaurant.id || restaurant.id.includes('temp') || restaurant.id.includes('api-id')) {
+        return;
+      }
+      setLoadingReviews(true);
+      try {
+        const res = await fetch(`${API_URL}/restaurants/${restaurant.id}/reviews`);
+        if (res.ok) {
+          const data = await res.json();
+          setReviews(data);
+        }
+      } catch (e) {
+        console.error('Fetch reviews error:', e);
+      } finally {
+        setLoadingReviews(false);
+      }
+    };
+    fetchReviews();
+  }, [restaurant.id]);
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
@@ -841,9 +875,7 @@ const Result: React.FC<{
           <ChevronLeft size={24} color={COLORS.dark} />
         </TouchableOpacity>
         <Text style={styles.resultTag}>{restaurant.category}</Text>
-        <TouchableOpacity onPress={() => onFavorite(restaurant)} style={styles.iconBtn}>
-          <Heart size={22} color={isFav ? COLORS.primary : COLORS.secondary} fill={isFav ? COLORS.primary : 'none'} />
-        </TouchableOpacity>
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -851,8 +883,16 @@ const Result: React.FC<{
         <Image source={{ uri: restaurant.imageUrl }} style={styles.heroImage} />
 
         <View style={{ padding: 20 }}>
-          {/* Name & Rating */}
-          <Text style={styles.heroName}>{restaurant.name}</Text>
+          {/* Name & Favorite Button */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <Text style={[styles.heroName, { flex: 1 }]}>{restaurant.name}</Text>
+            <TouchableOpacity 
+              onPress={() => onFavorite(restaurant)} 
+              style={[styles.iconBtn, { marginTop: -2 }]}
+            >
+              <Heart size={30} color={isFav ? COLORS.primary : COLORS.secondary} fill={isFav ? COLORS.primary : 'none'} />
+            </TouchableOpacity>
+          </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 6 }}>
             <StarRating rating={restaurant.rating} size={14} />
             <Text style={{ color: COLORS.secondary, fontSize: 13 }}>({restaurant.reviewCount.toLocaleString()} รีวิว)</Text>
@@ -903,6 +943,45 @@ const Result: React.FC<{
           {/* Map Preview */}
           <View style={{ height: 180, marginTop: 20, borderRadius: 20, overflow: 'hidden' }}>
             <MapComponent restaurant={restaurant} userLocation={location ?? undefined} />
+          </View>
+
+          <Divider style={{ marginVertical: 20 }} />
+
+          {/* Reviews Section */}
+          <View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.dark }}>รีวิวจากผู้ใช้</Text>
+              <TouchableOpacity onPress={() => navigate('add-review')}>
+                <Text style={{ color: COLORS.primary, fontWeight: '700', fontSize: 14 }}>เขียนรีวิว</Text>
+              </TouchableOpacity>
+            </View>
+
+            {loadingReviews ? (
+              <Text style={{ color: COLORS.secondary, fontStyle: 'italic', textAlign: 'center', padding: 20 }}>กำลังโหลดรีวิว...</Text>
+            ) : reviews.length > 0 ? (
+              reviews.map((rev, idx) => (
+                <View key={rev._id || idx} style={{ padding: 16, backgroundColor: '#f8f9fa', borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: COLORS.border }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: `${COLORS.primary}20`, justifyContent: 'center', alignItems: 'center', marginRight: 10 }}>
+                      <Text style={{ fontSize: 16 }}>{rev.user?.avatarUrl ? '👤' : '😀'}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontWeight: '700', fontSize: 14, color: COLORS.dark }}>{rev.user?.name || 'ผู้ใช้ไม่ระบุตัวตน'}</Text>
+                      <StarRating rating={rev.rating} size={11} />
+                    </View>
+                    <Text style={{ fontSize: 11, color: COLORS.secondary }}>
+                      {rev.createdAt ? new Date(rev.createdAt).toLocaleDateString('th-TH') : ''}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 14, color: COLORS.dark, lineHeight: 20 }}>{rev.comment}</Text>
+                </View>
+              ))
+            ) : (
+              <View style={{ padding: 24, alignItems: 'center', backgroundColor: '#f8f9fa', borderRadius: 16, borderWidth: 1, borderColor: COLORS.border }}>
+                <MessageSquare size={32} color={COLORS.secondary} style={{ marginBottom: 12, opacity: 0.5 }} />
+                <Text style={{ color: COLORS.secondary, textAlign: 'center' }}>ยังไม่มีรีวิวสำหรับร้านนี้{'\n'}เป็นคนแรกที่รีวิวสิ!</Text>
+              </View>
+            )}
           </View>
 
           {/* Shuffle Again */}
@@ -1126,9 +1205,10 @@ const RandomView: React.FC<{
 const Profile: React.FC<{
   navigate: (v: AppView) => void;
   favorites: Restaurant[];
-  history: Restaurant[];
   onSelect: (r: Restaurant) => void;
-}> = ({ navigate, favorites, history, onSelect }) => (
+  reviewCount: number;
+  user?: { id: string; name: string; email: string } | null;
+}> = ({ navigate, favorites, onSelect, user, reviewCount }) => (
   <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
       <View style={{ padding: 20 }}>
@@ -1137,16 +1217,15 @@ const Profile: React.FC<{
           <View style={styles.avatar}>
             <Text style={{ fontSize: 32 }}>🍜</Text>
           </View>
-          <Text style={{ fontSize: 22, fontWeight: '900', marginTop: 12, letterSpacing: -0.5 }}>Food Explorer</Text>
-          <Text style={{ color: COLORS.secondary, fontSize: 13 }}>Bangkok, Thailand</Text>
+          <Text style={{ fontSize: 22, fontWeight: '900', marginTop: 12, letterSpacing: -0.5 }}>{user?.name || 'Food Explorer'}</Text>
+          <Text style={{ color: COLORS.secondary, fontSize: 13 }}>{user?.email || 'Bangkok, Thailand'}</Text>
         </View>
 
         {/* Stats */}
         <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
           {[
-            { label: 'รีวิว', count: 12 },
+            { label: 'รีวิว', count: reviewCount },
             { label: 'ร้านโปรด', count: favorites.length },
-            { label: 'ประวัติ', count: history.length },
           ].map(({ label, count }) => (
             <Card key={label} style={{ flex: 1, alignItems: 'center' }}>
               <Text style={{ fontSize: 24, fontWeight: '900', color: COLORS.primary }}>{count}</Text>
@@ -1212,16 +1291,138 @@ const MenuView: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => voi
   </SafeAreaView>
 );
 
+// ─── EditProfile ──────────────────────────────────────────────
+const EditProfile: React.FC<{ 
+  navigate: (v: AppView) => void;
+  user?: { id: string; name: string; email: string } | null;
+  setUser?: (user: { id: string; name: string; email: string } | null) => void;
+}> = ({ navigate, user, setUser }) => {
+  const [name, setName] = useState(user?.name || '');
+  const [loading, setLoading] = useState(false);
+
+  const handleUpdateProfile = async () => {
+    if (!name.trim()) {
+      Alert.alert('ข้อมูลไม่ครบถ้วน', 'กรุณากรอกชื่อ');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (!token) {
+        Alert.alert('ต้องเข้าสู่ระบบ', 'กรุณาเข้าสู่ระบบก่อน');
+        navigate('login');
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/users/me`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'เกิดข้อผิดพลาดในการอัปเดตโปรไฟล์');
+      }
+
+      // Update local state
+      setUser?.(data);
+      await AsyncStorage.setItem('user', JSON.stringify(data));
+      Alert.alert('สำเร็จ!', 'อัปเดตโปรไฟล์เรียบร้อย');
+      navigate('profile');
+
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+      
+      <View style={styles.homeHeader}>
+        <TouchableOpacity onPress={() => navigate('settings')} style={styles.iconBtn}>
+          <ChevronLeft size={24} color={COLORS.dark} />
+        </TouchableOpacity>
+        <Text style={{ fontSize: 22, fontWeight: '900', letterSpacing: -0.5, marginLeft: 12 }}>แก้ไขโปรไฟล์</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+        {/* User Info Card */}
+        <Card style={{ marginBottom: 24, backgroundColor: `${COLORS.primary}10`, borderColor: COLORS.primary, borderWidth: 1 }}>
+          <View style={{ alignItems: 'center', marginBottom: 16 }}>
+            <View style={styles.avatar}>
+              <Text style={{ fontSize: 32 }}>🍜</Text>
+            </View>
+          </View>
+          <Text style={{ fontWeight: '700', fontSize: 14, color: COLORS.secondary, textAlign: 'center' }}>
+            📧 {user?.email}
+          </Text>
+        </Card>
+
+        {/* Name Input */}
+        <View>
+          <Text style={styles.inputLabel}>ชื่อของคุณ</Text>
+          <TextInput
+            style={[styles.input, { marginBottom: 20, borderColor: name.trim() ? COLORS.primary : COLORS.border, borderWidth: name.trim() ? 2 : 1 }]}
+            placeholder="ชื่อ-นามสกุล"
+            value={name}
+            onChangeText={setName}
+            autoCapitalize="words"
+            editable={!loading}
+          />
+        </View>
+
+        {/* Update Button */}
+        <Button onPress={handleUpdateProfile} size="lg" disabled={loading || !name.trim()}>
+          {loading ? 'กำลังอัปเดต...' : 'บันทึกการเปลี่ยนแปลง'}
+        </Button>
+
+        {/* Cancel Button */}
+        <Button 
+          onPress={() => navigate('settings')} 
+          variant="ghost" 
+          size="lg" 
+          style={{ marginTop: 12 }}
+          disabled={loading}
+        >
+          <Text style={{ color: COLORS.dark, fontWeight: '700' }}>ยกเลิก</Text>
+        </Button>
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
+
 // ─── SettingsView ─────────────────────────────────────────────
-const SettingsView: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
+const SettingsView: React.FC<{ 
+  navigate: (v: AppView) => void;
+  user?: { id: string; name: string; email: string } | null;
+  setUser?: (user: { id: string; name: string; email: string } | null) => void;
+}> = ({ navigate, user, setUser }) => {
   const settingsItems = [
-    { section: 'บัญชี', items: ['แก้ไขโปรไฟล์', 'การแจ้งเตือน', 'ความเป็นส่วนตัว'] },
-    { section: 'การตั้งค่า', items: ['ข้อจำกัดอาหาร', 'งบประมาณเริ่มต้น'] },
+    { section: 'บัญชี', items: [
+      { label: 'แก้ไขโปรไฟล์', action: () => navigate('edit-profile') },
+      { label: 'การแจ้งเตือน', action: () => {} },
+      { label: 'ความเป็นส่วนตัว', action: () => {} }
+    ]},
+    { section: 'การตั้งค่า', items: [
+      { label: 'ข้อจำกัดอาหาร', action: () => {} },
+      { label: 'งบประมาณเริ่มต้น', action: () => {} }
+    ]},
   ];
 
   const handleLogout = async () => {
     try {
       await AsyncStorage.removeItem('token');
+      await AsyncStorage.removeItem('user');
+      setUser?.(null);
       navigate('login');
     } catch (e) {
       console.error(e);
@@ -1240,9 +1441,9 @@ const SettingsView: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }
         {settingsItems.map(({ section, items }) => (
           <Card key={section}>
             <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.secondary, letterSpacing: 1, marginBottom: 12 }}>{section.toUpperCase()}</Text>
-            {items.map(item => (
-              <TouchableOpacity key={item} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: COLORS.border }}>
-                <Text style={{ fontWeight: '600', flex: 1, fontSize: 15 }}>{item}</Text>
+            {items.map(({ label, action }) => (
+              <TouchableOpacity key={label} onPress={action} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: COLORS.border }}>
+                <Text style={{ fontWeight: '600', flex: 1, fontSize: 15 }}>{label}</Text>
                 <ChevronRight size={16} color={COLORS.secondary} />
               </TouchableOpacity>
             ))}
@@ -1276,64 +1477,182 @@ const MapViewScreen: React.FC<{
 );
 
 // ─── Community ────────────────────────────────────────────────
-const Community: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => (
-  <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
-    <View style={{ padding: 20 }}>
-      <Text style={styles.homeTitle}>COMMUNITY</Text>
-    </View>
-    <ScrollView contentContainerStyle={{ padding: 20, gap: 16, paddingBottom: 100 }}>
-      {MOCK_RESTAURANTS.slice(0, 5).map(r => (
-        <Card key={r.id} style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-          <Image source={{ uri: r.imageUrl }} style={{ width: 60, height: 60, borderRadius: 12 }} />
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontWeight: '700' }}>{r.name}</Text>
-            <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 2 }}>
-              "{r.description}" 🌟
-            </Text>
+const Community: React.FC<{ 
+  navigate: (v: AppView) => void;
+  user?: { id: string; name: string; email: string } | null;
+}> = ({ navigate, user }) => {
+  const [posts, setPosts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchPosts = async () => {
+    try {
+      const res = await fetch(`${API_URL}/posts`);
+      if (res.ok) {
+        const data = await res.json();
+        setPosts(data);
+      }
+    } catch (e) {
+      console.error('Fetch posts error:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPosts();
+  }, []);
+
+  const handleDeletePost = async (postId: string) => {
+    Alert.alert(
+      'ลบโพสต์',
+      'คุณแน่ใจหรือไม่ว่าต้องการลบโพสต์นี้?',
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        {
+          text: 'ลบ',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const token = await AsyncStorage.getItem('token');
+              if (!token) return;
+
+              const res = await fetch(`${API_URL}/posts/${postId}`, {
+                method: 'DELETE',
+                headers: {
+                  Authorization: `Bearer ${token}`
+                }
+              });
+
+              if (res.ok) {
+                fetchPosts(); // Refresh list
+              } else {
+                const data = await res.json();
+                throw new Error(data.message || 'ไม่สามารถลบโพสต์ได้');
+              }
+            } catch (e: any) {
+              Alert.alert('ข้อผิดพลาด', e.message);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  return (
+    <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+      <View style={{ padding: 20 }}>
+        <Text style={styles.homeTitle}>COMMUNITY</Text>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 20, gap: 16, paddingBottom: 100 }}>
+        {loading ? (
+          <Text style={{ textAlign: 'center', color: COLORS.secondary }}>กำลังโหลดโพสต์...</Text>
+        ) : posts.length === 0 ? (
+          <View style={{ padding: 24, alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: COLORS.border }}>
+            <MessageSquare size={32} color={COLORS.secondary} style={{ marginBottom: 12, opacity: 0.5 }} />
+            <Text style={{ color: COLORS.secondary, textAlign: 'center' }}>ยังไม่มีโพสต์เลย{'\n'}เป็นคนแรกที่เริ่มพูดคุยสิ!</Text>
           </View>
-          <StarRating rating={r.rating} size={11} />
-        </Card>
-      ))}
-    </ScrollView>
+        ) : (
+          posts.map(post => (
+            <Card key={post._id} style={{ gap: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                  <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: `${COLORS.primary}20`, justifyContent: 'center', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 18 }}>{post.user?.avatarUrl ? '👤' : '😀'}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontWeight: '700', fontSize: 15, color: COLORS.dark }}>{post.user?.name || 'ผู้ใช้ไม่ระบุตัวตน'}</Text>
+                    <Text style={{ fontSize: 11, color: COLORS.secondary }}>{new Date(post.createdAt).toLocaleString('th-TH')}</Text>
+                  </View>
+                </View>
+                {user && post.user && user.id === post.user._id && (
+                  <TouchableOpacity onPress={() => handleDeletePost(post._id)} style={{ padding: 4 }}>
+                    <Trash2 size={18} color={COLORS.secondary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={{ fontWeight: '800', fontSize: 16, color: COLORS.dark, marginTop: 4 }}>{post.title}</Text>
+              <Text style={{ fontSize: 14, color: COLORS.dark, lineHeight: 22 }}>{post.body}</Text>
+              {post.tag ? (
+                <View style={{ alignSelf: 'flex-start', backgroundColor: `${COLORS.primary}15`, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, marginTop: 4 }}>
+                  <Text style={{ color: COLORS.primary, fontSize: 12, fontWeight: '600' }}>#{post.tag}</Text>
+                </View>
+              ) : null}
+            </Card>
+          ))
+        )}
+      </ScrollView>
 
-    {/* ── ปุ่ม Post FAB ── */}
-    <TouchableOpacity
-      onPress={() => navigate('create-post')}
-      style={{
-        position: 'absolute',
-        bottom: 80,   // อยู่เหนือ BottomNav
-        right: 20,
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        backgroundColor: COLORS.primary,
-        justifyContent: 'center',
-        alignItems: 'center',
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.4,
-        shadowRadius: 10,
-        elevation: 8,
-      }}
-      activeOpacity={0.85}
-    >
-      <Plus size={28} color="#fff" />
-    </TouchableOpacity>
+      {/* ── ปุ่ม Post FAB ── */}
+      <TouchableOpacity
+        onPress={() => navigate('create-post')}
+        style={{
+          position: 'absolute',
+          bottom: 80,   // อยู่เหนือ BottomNav
+          right: 20,
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          backgroundColor: COLORS.primary,
+          justifyContent: 'center',
+          alignItems: 'center',
+          shadowColor: COLORS.primary,
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.4,
+          shadowRadius: 10,
+          elevation: 8,
+        }}
+        activeOpacity={0.85}
+      >
+        <Plus size={28} color="#fff" />
+      </TouchableOpacity>
 
-    <BottomNav current="community" navigate={navigate} />
-  </SafeAreaView>
-);
+      <BottomNav current="community" navigate={navigate} />
+    </SafeAreaView>
+  );
+};
 
 // ─── CreatePost ───────────────────────────────────────────────
 const CreatePost: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [tag, setTag] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handlePost = () => {
-    // TODO: เชื่อม backend POST /api/posts
-    Alert.alert('✅ โพสต์สำเร็จ', 'โพสต์ของคุณถูกบันทึกแล้ว (mock)');
-    navigate('community');
+  const handlePost = async () => {
+    try {
+      setLoading(true);
+      const token = await AsyncStorage.getItem('token');
+      if (!token) {
+        Alert.alert('ต้องเข้าสู่ระบบ', 'กรุณาเข้าสู่ระบบก่อนสร้างโพสต์');
+        navigate('login');
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/posts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          title: title.trim(),
+          body: body.trim(),
+          tag: tag.trim()
+        })
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || 'ไม่สามารถสร้างโพสต์ได้');
+      }
+
+      Alert.alert('✅ สำเร็จ', 'โพสต์ของคุณถูกบันทึกแล้ว');
+      navigate('community');
+    } catch (e: any) {
+      Alert.alert('❌ ข้อผิดพลาด', e.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -1350,15 +1669,15 @@ const CreatePost: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) 
         </Text>
         <TouchableOpacity
           onPress={handlePost}
-          disabled={!title.trim() || !body.trim()}
+          disabled={!title.trim() || !body.trim() || loading}
           style={{
-            backgroundColor: title.trim() && body.trim() ? COLORS.primary : COLORS.border,
+            backgroundColor: title.trim() && body.trim() && !loading ? COLORS.primary : COLORS.border,
             borderRadius: 999,
             paddingHorizontal: 18,
             paddingVertical: 8,
           }}
         >
-          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>โพสต์</Text>
+          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{loading ? 'กำลังส่ง...' : 'โพสต์'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -1402,32 +1721,184 @@ const CreatePost: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) 
 };
 
 // ─── VideoFeed ────────────────────────────────────────────────
-const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => (
-  <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
-    <View style={{ padding: 20 }}>
-      <Text style={styles.homeTitle}>FOOD REELS</Text>
-    </View>
-    <FlatList
-      data={MOCK_RESTAURANTS.slice(0, 6)}
-      keyExtractor={i => i.id}
-      numColumns={2}
-      contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 100 }}
-      columnWrapperStyle={{ gap: 8 }}
-      renderItem={({ item }) => (
-        <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
-          <Image source={{ uri: item.imageUrl }} style={StyleSheet.absoluteFillObject} />
-          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
-            <Play size={32} color="#fff" fill="#fff" />
+const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
+  const [showModal, setShowModal] = useState(false);
+
+  return (
+    <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+      <View style={{ padding: 20 }}>
+        <Text style={styles.homeTitle}>FOOD REELS</Text>
+      </View>
+
+      <FlatList
+        data={MOCK_RESTAURANTS.slice(0, 6)}
+        keyExtractor={i => i.id}
+        numColumns={2}
+        contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 100 }}
+        columnWrapperStyle={{ gap: 8 }}
+        renderItem={({ item }) => (
+          <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
+            <Image source={{ uri: item.imageUrl }} style={StyleSheet.absoluteFillObject} />
+            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
+              <Play size={32} color="#fff" fill="#fff" />
+            </View>
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 10 }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }} numberOfLines={1}>{item.name}</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+      />
+
+      {/* ── ปุ่ม Post Video FAB ── */}
+      <TouchableOpacity
+        onPress={() => setShowModal(true)}
+        style={{
+          position: 'absolute',
+          bottom: 80,   // อยู่เหนือ BottomNav
+          right: 20,
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          backgroundColor: COLORS.primary,
+          justifyContent: 'center',
+          alignItems: 'center',
+          shadowColor: COLORS.primary,
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.4,
+          shadowRadius: 10,
+          elevation: 8,
+        }}
+        activeOpacity={0.85}
+      >
+        <Plus size={28} color="#fff" />
+      </TouchableOpacity>
+
+      {/* Modal for Post Video */}
+      <Modal
+        visible={showModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            paddingHorizontal: 20,
+            paddingVertical: 32,
+            paddingBottom: Platform.OS === 'ios' ? 40 : 32,
+          }}>
+            {/* Header */}
+            <View style={{ marginBottom: 24 }}>
+              <Text style={{ fontSize: 24, fontWeight: '900', color: COLORS.dark, letterSpacing: -0.5, marginBottom: 8 }}>
+                📹 สร้างวิดีโอใหม่
+              </Text>
+              <Text style={{ fontSize: 14, color: COLORS.secondary }}>
+                เลือกวิธีการเพิ่มวิดีโอของคุณ
+              </Text>
+            </View>
+
+            {/* Options */}
+            <TouchableOpacity
+              onPress={() => {
+                setShowModal(false);
+                Alert.alert('📱 เลือกจากแกลเลอรี่', 'คุณลิคจะเลือกวิดีโอจากแกลเลอรี่');
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: `${COLORS.primary}10`,
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 12,
+                borderWidth: 1,
+                borderColor: COLORS.primary,
+              }}
+            >
+              <View style={{ 
+                width: 48, 
+                height: 48, 
+                borderRadius: 12, 
+                backgroundColor: COLORS.primary, 
+                justifyContent: 'center', 
+                alignItems: 'center',
+                marginRight: 12
+              }}>
+                <Video size={24} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.dark }}>
+                  เลือกจากแกลเลอรี่
+                </Text>
+                <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 4 }}>
+                  อัปโหลดวิดีโอที่มีอยู่
+                </Text>
+              </View>
+              <ChevronRight size={20} color={COLORS.primary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => {
+                setShowModal(false);
+                Alert.alert('📹 ถ่ายวิดีโอใหม่', 'ระบบกำลังเปิดกล้อง');
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#fff',
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 16,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+              }}
+            >
+              <View style={{ 
+                width: 48, 
+                height: 48, 
+                borderRadius: 12, 
+                backgroundColor: COLORS.secondary, 
+                justifyContent: 'center', 
+                alignItems: 'center',
+                marginRight: 12,
+                opacity: 0.2
+              }}>
+                <Video size={24} color={COLORS.secondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.dark }}>
+                  ถ่ายวิดีโอใหม่
+                </Text>
+                <Text style={{ fontSize: 12, color: COLORS.secondary, marginTop: 4 }}>
+                  ถ่ายวิดีโอด้วยกล้องของคุณ
+                </Text>
+              </View>
+              <ChevronRight size={20} color={COLORS.secondary} />
+            </TouchableOpacity>
+
+            {/* Cancel Button */}
+            <TouchableOpacity
+              onPress={() => setShowModal(false)}
+              style={{
+                paddingVertical: 14,
+                paddingHorizontal: 20,
+                borderRadius: 12,
+                backgroundColor: COLORS.bg,
+              }}
+            >
+              <Text style={{ fontSize: 16, fontWeight: '600', color: COLORS.secondary, textAlign: 'center' }}>
+                ยกเลิก
+              </Text>
+            </TouchableOpacity>
           </View>
-          <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 10 }}>
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }} numberOfLines={1}>{item.name}</Text>
-          </View>
-        </TouchableOpacity>
-      )}
-    />
-    <BottomNav current="videos" navigate={navigate} />
-  </SafeAreaView>
-);
+        </View>
+      </Modal>
+
+      <BottomNav current="videos" navigate={navigate} />
+    </SafeAreaView>
+  );
+};
 
 // ─── AddReview (FIXED) ────────────────────────────────────────────────
 const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => void }> = ({ restaurant, navigate }) => {
@@ -1501,6 +1972,14 @@ const AddReview: React.FC<{ restaurant: Restaurant; navigate: (v: AppView) => vo
         body: JSON.stringify({
           rating,
           comment: comment.trim(),
+          restaurantData: {
+            name: restaurant.name,
+            category: restaurant.category,
+            address: restaurant.address,
+            priceLevel: restaurant.priceLevel,
+            imageUrl: restaurant.imageUrl,
+            location: restaurant.location,
+          }
         }),
       });
 
@@ -1671,11 +2150,18 @@ export default function App() {
   const [history, setHistory] = useState<Restaurant[]>(MOCK_RESTAURANTS.slice(0, 3));
   const [favorites, setFavorites] = useState<Restaurant[]>([]);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [realRestaurants, setRealRestaurants] = useState<Restaurant[]>([]); // ✅ Real Google Places data
+  const [isLoadingRestaurants, setIsLoadingRestaurants] = useState(false);
   const [randomConfig, setRandomConfig] = useState({
     maxBudget: 4,
     maxDistance: 10,
     categories: [] as string[],
   });
+  const [reviewCount, setReviewCount] = useState(0);
+  // ──── User State ────
+  const [user, setUser] = useState<{ id: string; name: string; email: string } | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  
   const screenOpacity = useRef(new Animated.Value(1)).current;
   const screenTranslateY = useRef(new Animated.Value(0)).current;
 
@@ -1692,6 +2178,167 @@ export default function App() {
       ]).start();
     });
   };
+
+  // ──── Check for persistent login ────
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const token = await AsyncStorage.getItem('token');
+        if (token) {
+          // Token exists, fetch user data
+          const res = await fetch(`${API_URL}/users/me`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          
+          if (res.ok) {
+            const userData = await res.json();
+            setUser(userData);
+            navigate('home'); // Go directly to home if logged in
+          } else {
+            // Token expired or invalid
+            await AsyncStorage.removeItem('token');
+            navigate('login');
+          }
+        } else {
+          navigate('login');
+        }
+      } catch (e) {
+        navigate('login');
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  // ✅ Fetch real Google Places restaurants using GPS
+  useEffect(() => {
+    const fetchRealRestaurants = async () => {
+      try {
+        setIsLoadingRestaurants(true);
+        
+        // Always try to get GPS location
+        let currentLoc = location;
+        if (!currentLoc) {
+          console.log('📍 Requesting GPS location...');
+          try {
+            // Request permission first
+            const { status } = await Location.requestForegroundPermissionsAsync();
+            console.log('📍 Permission status:', status);
+            
+            if (status !== 'granted') {
+              console.warn('❌ Location permission denied');
+              Alert.alert(
+                '🗺️ ต้องการเข้าถึง GPS',
+                'แอปต้องการข้อมูลตำแหน่งของคุณเพื่อหาร้านอาหารใกล้ที่สุด\n\nกรุณาเปิด GPS และให้สิทธิ์การเข้าถึงตำแหน่ง',
+                [
+                  {
+                    text: 'ยกเลิก',
+                    onPress: () => {
+                      console.log('User denied location');
+                      Alert.alert('ข้อมูล', 'ไม่สามารถดึงข้อมูลร้านอาหารโดยไม่มี GPS');
+                    },
+                    style: 'cancel',
+                  },
+                  {
+                    text: 'เปิด Settings',
+                    onPress: () => {
+                      // On mobile, you can use Linking to open settings
+                      // For now, just show a message
+                      Alert.alert('ข้อมูล', 'กรุณาไปที่ Settings > Apps > KINRAIDEEAPP > Permissions > Location');
+                    },
+                  },
+                ]
+              );
+              setIsLoadingRestaurants(false);
+              return;
+            }
+
+            // Get position
+            console.log('📍 Getting current position...');
+            const pos = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            });
+            currentLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+            setLocation(currentLoc);
+            console.log('📍 ✅ Got GPS location:', currentLoc);
+          } catch (locErr: any) {
+            console.error('❌ GPS Error:', locErr);
+            Alert.alert(
+              '❌ ไม่สามารถเข้าถึง GPS',
+              `${locErr?.message || 'ไม่ทราบสาเหตุ'}\n\nกรุณาแน่ใจว่า:\n• GPS ถูกเปิดใช้งาน\n• แอปได้รับสิทธิ์ Location\n• การเชื่อมต่อมีเสถียรภาพ`,
+              [
+                {
+                  text: 'ปิด',
+                  onPress: () => {
+                    setIsLoadingRestaurants(false);
+                  },
+                  style: 'cancel',
+                },
+              ]
+            );
+            return;
+          }
+        }
+
+        if (!currentLoc) {
+          console.log('❌ No location available');
+          Alert.alert('ข้อผิดพลาด', 'ไม่สามารถเข้าถึงตำแหน่งของคุณได้');
+          setIsLoadingRestaurants(false);
+          return;
+        }
+
+        console.log('📍 Fetching restaurants near:', currentLoc.lat, currentLoc.lng);
+
+        const queryParams = new URLSearchParams({
+          lat: currentLoc.lat.toString(),
+          lng: currentLoc.lng.toString(),
+          limit: '30',
+          radius: '5000'
+        });
+
+        const response = await fetch(`${API_URL}/restaurants?${queryParams}`);
+        const data = await response.json();
+
+        if (data.restaurants && data.restaurants.length > 0) {
+          console.log(`✅ Found ${data.restaurants.length} real restaurants from ${data.source}`);
+          const mapped: Restaurant[] = data.restaurants.map((r: any, idx: number) => ({
+            id: r._id || `res-${idx}`,
+            name: r.name || 'Unknown',
+            rating: r.rating || 0,
+            reviewCount: r.reviewCount || 0,
+            priceLevel: r.priceLevel || 2,
+            category: r.category || 'General',
+            address: r.address || '',
+            distance: 'ใกล้คุณ',
+            imageUrl: r.imageUrl || `https://picsum.photos/seed/${idx}/400/300`,
+            description: r.description || '',
+            location: {
+              lat: r.location?.coordinates?.[1] || currentLoc.lat,
+              lng: r.location?.coordinates?.[0] || currentLoc.lng,
+            },
+            reviews: [],
+            videoReviews: [],
+            menu: [],
+          }));
+          setRealRestaurants(mapped);
+        } else {
+          console.log('⚠️ No restaurants found, using mock data');
+          setRealRestaurants(MOCK_RESTAURANTS);
+        }
+      } catch (err) {
+        console.error('❌ Error fetching restaurants:', err);
+        setRealRestaurants(MOCK_RESTAURANTS);
+      } finally {
+        setIsLoadingRestaurants(false);
+      }
+    };
+
+    if (view === 'home') {
+      fetchRealRestaurants();
+    }
+  }, [view]);
 
   const onSelect = async (r: Restaurant) => {
     setSelected(r);
@@ -1722,19 +2369,88 @@ export default function App() {
     navigate('randomizer'); // Randomizer ดึงข้อมูลและ filter เองแล้ว
   };
 
+  // Load favorites from backend
+  const loadFavorites = async () => {
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (!token) return;
+
+      const resFav = await fetch(`${API_URL}/users/me/favorites`, { 
+        headers: { Authorization: `Bearer ${token}` } 
+      });
+
+      if (resFav.ok) {
+        const favData = await resFav.json();
+        const mapToRestaurant = (f: any): Restaurant => ({
+          id: f._id, name: f.name, rating: f.rating || 0, reviewCount: f.reviewCount || 0,
+          priceLevel: f.priceLevel || 2, category: f.category || 'General',
+          address: f.address || '', distance: f.distance || 'ใกล้คุณ',
+          imageUrl: f.imageUrl || 'https://picsum.photos/400', description: f.description || '',
+          location: { lat: f.location?.coordinates?.[1] || 0, lng: f.location?.coordinates?.[0] || 0 },
+          reviews: [], videoReviews: [], menu: []
+        });
+        setFavorites(favData.map(mapToRestaurant));
+      }
+    } catch (e) {
+      console.error('Load favorites error:', e);
+    }
+  };
+
   const toggleFavorite = async (r: Restaurant) => {
     const isFav = favorites.some(f => f.id === r.id);
     setFavorites(prev => isFav ? prev.filter(f => f.id !== r.id) : [r, ...prev]);
 
     try {
       const token = await AsyncStorage.getItem('token');
-      if (token && r.id && !r.id.includes('temp') && !r.id.includes('api-id')) {
-        await fetch(`${API_URL}/users/me/favorites/${r.id}`, {
+      if (token && r.id) {
+        console.log('📌 Toggling favorite for:', r.name);
+        
+        const response = await fetch(`${API_URL}/users/me/favorites/${r.id}`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { 
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}` 
+          },
+          body: JSON.stringify({
+            restaurantData: {
+              name: r.name,
+              rating: r.rating,
+              reviewCount: r.reviewCount,
+              priceLevel: r.priceLevel,
+              category: r.category,
+              address: r.address,
+              imageUrl: r.imageUrl,
+              description: r.description,
+              distance: r.distance,
+              // ✅ Send location in both formats to be safe
+              location: {
+                type: 'Point',
+                coordinates: [r.location?.lng || 100.5, r.location?.lat || 13.7]
+              }
+            }
+          })
         });
+
+        const data = await response.json();
+        console.log('Response:', data);
+
+        if (!response.ok) {
+          // If request failed, revert the UI change
+          setFavorites(prev => isFav ? [r, ...prev] : prev.filter(f => f.id !== r.id));
+          Alert.alert('Error', data.message || 'Failed to update favorite');
+        } else {
+          // Success! Show feedback
+          Alert.alert('Success', data.saved ? '✅ Added to favorites!' : '❌ Removed from favorites');
+          // Reload favorites from backend to ensure sync
+          setTimeout(() => loadFavorites(), 500);
+        }
       }
-    } catch (e) { }
+    } catch (e: any) {
+      // If error occurred, revert the UI change
+      setFavorites(prev => isFav ? [r, ...prev] : prev.filter(f => f.id !== r.id));
+      console.error('Toggle favorite error:', e);
+      Alert.alert('Error', 'Failed to update favorite: ' + e.message);
+    }
   };
 
   // ดึงข้อมูล History และ Favorites จาก Backend
@@ -1744,10 +2460,22 @@ export default function App() {
         const token = await AsyncStorage.getItem('token');
         if (!token) return;
 
-        const [resFav, resHist] = await Promise.all([
-          fetch(`${API_URL}/users/me/favorites`, { headers: { Authorization: `Bearer ${token}` } }),
-          fetch(`${API_URL}/users/me/history`, { headers: { Authorization: `Bearer ${token}` } })
-        ]);
+        // Load favorites
+        await loadFavorites();
+
+        // Load review count
+        const resReviews = await fetch(`${API_URL}/users/me/review-count`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (resReviews.ok) {
+          const data = await resReviews.json();
+          setReviewCount(data.count);
+        }
+
+        // Load history
+        const resHist = await fetch(`${API_URL}/users/me/history`, { 
+          headers: { Authorization: `Bearer ${token}` } 
+        });
 
         const mapToRestaurant = (f: any): Restaurant => ({
           id: f._id, name: f.name, rating: f.rating || 0, reviewCount: f.reviewCount || 0,
@@ -1758,11 +2486,6 @@ export default function App() {
           reviews: [], videoReviews: [], menu: []
         });
 
-        if (resFav.ok) {
-          const favData = await resFav.json();
-          setFavorites(favData.map(mapToRestaurant));
-        }
-
         if (resHist.ok) {
           const histData = await resHist.json();
           const histRestaurants = histData.map((h: any) => h.restaurant).filter(Boolean).map(mapToRestaurant);
@@ -1770,7 +2493,9 @@ export default function App() {
             .map(id => histRestaurants.find((r: any) => r.id === id));
           setHistory(uniqueHist as Restaurant[]);
         }
-      } catch (e) { }
+      } catch (e) {
+        console.error('Error loading user data:', e);
+      }
     };
 
     if (view === 'home' || view === 'profile') {
@@ -1780,6 +2505,11 @@ export default function App() {
 
   // ── Render ──
   const render = () => {
+    // Show a loading splash if we're checking auth
+    if (isCheckingAuth && view === 'splash') {
+      return <Splash onDone={() => {}} />;
+    }
+
     switch (view) {
       case 'splash': return <Splash onDone={() => navigate('login')} />;
       case 'login': return <Login navigate={navigate} />;
@@ -1802,7 +2532,7 @@ export default function App() {
       case 'home': return (
         <Home
           navigate={navigate}
-          restaurants={MOCK_RESTAURANTS.filter(r => budget === 0 || r.priceLevel <= budget)}
+          restaurants={realRestaurants.length > 0 ? realRestaurants.filter(r => budget === 0 || r.priceLevel <= budget) : MOCK_RESTAURANTS.filter(r => budget === 0 || r.priceLevel <= budget)}
           onSelect={onSelect}
           category={category}
           setCategory={setCategory}
@@ -1813,14 +2543,15 @@ export default function App() {
         ? <MapViewScreen restaurant={selectedRestaurant} navigate={navigate} location={location} />
         : null;
       case 'menu': return selectedRestaurant ? <MenuView restaurant={selectedRestaurant} navigate={navigate} /> : null;
-      case 'profile': return <Profile navigate={navigate} favorites={favorites} history={history} onSelect={onSelect} />;
-      case 'settings': return <SettingsView navigate={navigate} />;
-      case 'community': return <Community navigate={navigate} />;
+      case 'profile': return <Profile navigate={navigate} favorites={favorites} onSelect={onSelect} user={user} reviewCount={reviewCount} />;
+      case 'edit-profile': return <EditProfile navigate={navigate} user={user} setUser={setUser} />;
+      case 'settings': return <SettingsView navigate={navigate} user={user} setUser={setUser} />;
+      case 'community': return <Community navigate={navigate} user={user} />;
       case 'create-post': return <CreatePost navigate={navigate} />;
       case 'videos': return <VideoFeed navigate={navigate} />;
       case 'add-review': return selectedRestaurant ? <AddReview restaurant={selectedRestaurant} navigate={navigate} /> : null;
       case 'history': return <HistoryView navigate={navigate} history={history} onSelect={onSelect} />;
-      default: return <Home navigate={navigate} restaurants={MOCK_RESTAURANTS} onSelect={onSelect} category={category} setCategory={setCategory} />;
+      default: return <Home navigate={navigate} restaurants={realRestaurants.length > 0 ? realRestaurants : MOCK_RESTAURANTS} onSelect={onSelect} category={category} setCategory={setCategory} />;
     }
   };
 
@@ -1885,7 +2616,7 @@ const styles = StyleSheet.create({
   cardName: { fontSize: 15, fontWeight: '700', color: COLORS.dark },
   cardAddr: { fontSize: 12, color: COLORS.secondary, marginTop: 2 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
-  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+  iconBtn: { width: 50 , height: 50, borderRadius: 40, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
 
   // ── Result ──
   resultHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },

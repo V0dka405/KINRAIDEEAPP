@@ -16,6 +16,7 @@ const MenuItemSchema = new mongoose.Schema({
 // ─── Restaurant ───────────────────────────────────────────────
 const RestaurantSchema = new mongoose.Schema(
   {
+    externalId:  { type: String, index: true },  // For Google Place IDs or other external sources
     name:        { type: String, required: true, index: true },
     rating:      { type: Number, default: 0, min: 0, max: 5 },
     reviewCount: { type: Number, default: 0 },
@@ -97,6 +98,23 @@ const UserFavoriteSchema = new mongoose.Schema(
 
 UserFavoriteSchema.index({ user: 1, restaurant: 1 }, { unique: true });
 
+// ─── Post (Community) ─────────────────────────────────────────
+const PostSchema = new mongoose.Schema(
+  {
+    user:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    title:    { type: String, required: true, maxlength: 200 },
+    body:     { type: String, required: true, maxlength: 2000 },
+    tag:      { type: String, maxlength: 50 },
+    likes:    { type: Number, default: 0 },
+    comments: [{
+      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      text: { type: String, required: true },
+      createdAt: { type: Date, default: Date.now }
+    }],
+  },
+  { timestamps: true }
+);
+
 // ─── สร้าง Models ──────────────────────────────────────────────
 export const Restaurant = mongoose.model('Restaurant', RestaurantSchema);
 export const User = mongoose.model('User', UserSchema);
@@ -104,6 +122,7 @@ export const Review = mongoose.model('Review', ReviewSchema);
 export const VideoReview = mongoose.model('VideoReview', VideoReviewSchema);
 export const UserHistory = mongoose.model('UserHistory', UserHistorySchema);
 export const UserFavorite = mongoose.model('UserFavorite', UserFavoriteSchema);
+export const Post = mongoose.model('Post', PostSchema);
 
 // หลังบันทึกรีวิว → คำนวณ rating ใหม่ของร้าน (ย้ายมาไว้ข้างล่างหลังจากประกาศ Review)
 ReviewSchema.post('save', async function () {

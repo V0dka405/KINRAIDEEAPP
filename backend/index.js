@@ -9,9 +9,12 @@ import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
+
+
+
 // ดึง Models (ตรวจสอบว่าไฟล์ models/index.js ใช้ export แบบ ESM เช่นกัน)
 import { 
-  Restaurant, User, Review, VideoReview, UserHistory, UserFavorite 
+  Restaurant, User, Review, VideoReview, UserHistory, UserFavorite, Post
 } from './models/index.js'; 
 
 dotenv.config();
@@ -75,6 +78,44 @@ app.post('/api/auth/login', async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
+
+// ============================================================
+// USER Profile Routes
+// ============================================================
+
+app.get('/api/users/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-passwordHash');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.put('/api/users/me', authMiddleware, async (req, res) => {
+  try {
+    const { name } = req.body;
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { name },
+      { new: true }
+    ).select('-passwordHash');
+    res.json({ id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.get('/api/users/me/review-count', authMiddleware, async (req, res) => {
+  try {
+    const count = await Review.countDocuments({ user: req.user.id });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+// ─── Helper: Sanitize Category ─────────────────────────────────
 
 // ============================================================
 // RESTAURANT Routes
@@ -189,9 +230,14 @@ app.get('/api/restaurants', async (req, res) => {
 app.get('/api/restaurants/random-category', (req, res) => {
   try {
     const categories = [
-      'ก๋วยเตี๋ยว',
-      'อาหารจานเดียว',
-      'สตรีทฟู้ด',
+      'Street Food', 
+      'Noodles',
+      'Rice Dishes',
+      'Cafe',
+      'Japanese',
+      'Korean', 
+      'Western', 
+      'Dessert',
     ];
 
     const randomCategory = categories[Math.floor(Math.random() * categories.length)];
@@ -221,7 +267,19 @@ app.get('/api/restaurants/:id', async (req, res) => {
 
 app.get('/api/restaurants/:id/reviews', async (req, res) => {
   try {
-    const reviews = await Review.find({ restaurant: req.params.id })
+    const restaurantId = req.params.id;
+    let restaurantDocId = restaurantId;
+
+    const isValidMongoId = /^[0-9a-fA-F]{24}$/.test(restaurantId);
+    if (!isValidMongoId) {
+      const restaurant = await Restaurant.findOne({ externalId: restaurantId });
+      if (!restaurant) {
+        return res.json([]); // No reviews yet for this external place
+      }
+      restaurantDocId = restaurant._id;
+    }
+
+    const reviews = await Review.find({ restaurant: restaurantDocId })
       .populate('user', 'name avatarUrl')
       .sort('-createdAt')
       .limit(50);
@@ -237,7 +295,7 @@ app.get('/api/restaurants/:id/reviews', async (req, res) => {
 // - สร้าง temporary record สำหรับร้านใหม่
 app.post('/api/restaurants/:id/reviews', authMiddleware, async (req, res) => {
   try {
-    const { rating, comment } = req.body;
+    const { rating, comment, restaurantData } = req.body;
     const restaurantId = req.params.id;
 
     // ✅ Validation
@@ -262,32 +320,43 @@ app.post('/api/restaurants/:id/reviews', authMiddleware, async (req, res) => {
       commentLength: comment.length
     });
 
-    // ✅ สำหรับ Google Places API restaurants (ไม่มี MongoDB record)
-    // ให้สร้าง record ใหม่ในฐานข้อมูลก่อน
-    let restaurant = await Restaurant.findById(restaurantId);
-    
-    if (!restaurant && restaurantId.startsWith('ChIJ')) {
-      // นี่คือ Google Place ID (ขึ้นต้นด้วย ChIJ) → สร้าง temporary record
-      console.log('🏪 Creating temporary restaurant record for Google Place:', restaurantId);
+    let restaurantDocId = restaurantId;
+    const isValidMongoId = /^[0-9a-fA-F]{24}$/.test(restaurantId);
+
+    if (!isValidMongoId) {
+      let restaurant = await Restaurant.findOne({ externalId: restaurantId });
       
-      restaurant = await Restaurant.create({
-        _id: restaurantId,
-        name: 'Temporary Restaurant',
-        category: 'General',
-        address: 'Google Places Location',
-        priceLevel: 2,
-        rating: 0,
-        reviewCount: 0,
-        location: {
-          type: 'Point',
-          coordinates: [100.5, 13.5] // Default Bangkok coords
+      if (!restaurant) {
+        console.log('🏪 Creating temporary restaurant record for Google Place:', restaurantId);
+        
+        let locationData = { type: 'Point', coordinates: [100.5, 13.5] };
+        if (restaurantData?.location && restaurantData.location.lng && restaurantData.location.lat) {
+          locationData = { type: 'Point', coordinates: [restaurantData.location.lng, restaurantData.location.lat] };
         }
-      });
+
+        restaurant = await Restaurant.create({
+          externalId: restaurantId,
+          name: restaurantData?.name || 'Temporary Restaurant',
+          category: restaurantData?.category || 'Cafe',
+          address: restaurantData?.address || 'Google Places Location',
+          priceLevel: restaurantData?.priceLevel || 2,
+          rating: 0,
+          reviewCount: 0,
+          location: locationData
+        });
+      }
+      restaurantDocId = restaurant._id;
+    } else {
+      // Validate that the mongo ID actually exists
+      const restaurant = await Restaurant.findById(restaurantDocId);
+      if (!restaurant) {
+        return res.status(404).json({ message: 'Restaurant not found in database' });
+      }
     }
 
     // ✅ สร้าง Review
     const review = await Review.create({
-      restaurant: restaurantId,
+      restaurant: restaurantDocId,
       user: req.user.id,
       rating: Number(rating),
       comment: comment.trim(),
@@ -347,9 +416,30 @@ app.post('/api/users/me/history', authMiddleware, async (req, res) => {
 app.get('/api/users/me/favorites', authMiddleware, async (req, res) => {
   try {
     const favorites = await UserFavorite.find({ user: req.user.id })
-      .populate('restaurant', 'name imageUrl address rating priceLevel category distance')
+      .populate('restaurant')
       .sort('-createdAt');
-    res.json(favorites.map(f => f.restaurant));
+    
+    // Map to return full restaurant data
+    const restaurantData = favorites.map(f => {
+      if (f.restaurant) {
+        return {
+          _id: f.restaurant._id,
+          name: f.restaurant.name,
+          rating: f.restaurant.rating || 0,
+          reviewCount: f.restaurant.reviewCount || 0,
+          priceLevel: f.restaurant.priceLevel || 2,
+          category: f.restaurant.category || 'General',
+          address: f.restaurant.address || '',
+          imageUrl: f.restaurant.imageUrl || 'https://picsum.photos/400',
+          description: f.restaurant.description || '',
+          distance: f.restaurant.distance || 'ใกล้คุณ',
+          location: f.restaurant.location
+        };
+      }
+      return null;
+    }).filter(Boolean);
+    
+    res.json(restaurantData);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -358,13 +448,151 @@ app.get('/api/users/me/favorites', authMiddleware, async (req, res) => {
 app.post('/api/users/me/favorites/:restaurantId', authMiddleware, async (req, res) => {
   try {
     const { restaurantId } = req.params;
-    const existing = await UserFavorite.findOne({ user: req.user.id, restaurant: restaurantId });
-    if (existing) {
-      await existing.deleteOne();
-      return res.json({ saved: false });
+    const { restaurantData } = req.body;
+    
+    let restaurantDocId = null;
+    
+    // Check if restaurantId is a valid MongoDB ObjectId
+    const isValidMongoId = /^[0-9a-fA-F]{24}$/.test(restaurantId);
+    
+    if (isValidMongoId) {
+      // It's already a MongoDB ObjectId
+      restaurantDocId = restaurantId;
+    } else if (restaurantData) {
+      // It's an external ID (like Google Place ID) - need to create/find restaurant in DB
+      let restaurant = await Restaurant.findOne({ 
+        externalId: restaurantId 
+      });
+      
+      if (!restaurant) {
+        // Try to find by name + address as fallback
+        restaurant = await Restaurant.findOne({ 
+          name: restaurantData.name, 
+          address: restaurantData.address 
+        });
+      }
+      
+      if (!restaurant) {
+        // Create new restaurant record from external data
+        console.log('Creating new restaurant:', restaurantData.name);
+        
+        // Ensure location has valid coordinates
+        let locationData = {
+          type: 'Point',
+          coordinates: [100.5, 13.5] // Bangkok default
+        };
+        
+        if (restaurantData.location && Array.isArray(restaurantData.location.coordinates)) {
+          locationData = restaurantData.location;
+        } else if (restaurantData.location && restaurantData.location.lng && restaurantData.location.lat) {
+          locationData = {
+            type: 'Point',
+            coordinates: [restaurantData.location.lng, restaurantData.location.lat]
+          };
+        }
+        
+        restaurant = await Restaurant.create({
+          externalId: restaurantId,
+          name: restaurantData.name,
+          rating: restaurantData.rating || 0,
+          reviewCount: restaurantData.reviewCount || 0,
+          priceLevel: restaurantData.priceLevel || 2,
+          category: restaurantData.category || 'General',
+          address: restaurantData.address || '',
+          imageUrl: restaurantData.imageUrl || '',
+          description: restaurantData.description || '',
+          location: locationData
+        });
+        console.log('Restaurant created:', restaurant._id);
+      } else {
+        // Update externalId if not set
+        if (!restaurant.externalId) {
+          restaurant.externalId = restaurantId;
+          await restaurant.save();
+        }
+      }
+      restaurantDocId = restaurant._id;
+    } else {
+      return res.status(400).json({ message: 'Invalid restaurant ID or data' });
     }
-    await UserFavorite.create({ user: req.user.id, restaurant: restaurantId });
-    res.json({ saved: true });
+    
+    // Check if favorite already exists
+    const existing = await UserFavorite.findOne({ 
+      user: req.user.id, 
+      restaurant: restaurantDocId
+    });
+    
+    if (existing) {
+      // Remove from favorites
+      console.log('Removing favorite');
+      await existing.deleteOne();
+      return res.json({ saved: false, message: 'Removed from favorites' });
+    }
+    
+    // Add to favorites
+    console.log('Adding favorite');
+    await UserFavorite.create({ 
+      user: req.user.id, 
+      restaurant: restaurantDocId
+    });
+    
+    res.json({ saved: true, message: 'Added to favorites' });
+  } catch (err) {
+    console.error('Favorite error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ============================================================
+// COMMUNITY (Posts) Routes
+// ============================================================
+
+app.get('/api/posts', async (req, res) => {
+  try {
+    const posts = await Post.find()
+      .populate('user', 'name avatarUrl')
+      .sort('-createdAt')
+      .limit(50);
+    res.json(posts);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.post('/api/posts', authMiddleware, async (req, res) => {
+  try {
+    const { title, body, tag } = req.body;
+    if (!title || !body) {
+      return res.status(400).json({ message: 'Title and body are required' });
+    }
+    const post = await Post.create({
+      user: req.user.id,
+      title,
+      body,
+      tag
+    });
+    await post.populate('user', 'name avatarUrl');
+    res.status(201).json(post);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.delete('/api/posts/:id', authMiddleware, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    
+    if (!post) {
+      return res.status(404).json({ message: 'Post not found' });
+    }
+
+    // Check if the user is the owner of the post
+    if (post.user.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to delete this post' });
+    }
+
+    await post.deleteOne();
+    res.json({ message: 'Post removed' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
