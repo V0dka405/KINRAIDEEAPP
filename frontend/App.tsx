@@ -19,12 +19,14 @@ import {
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
+import { Video as ExpoVideo } from 'expo-av';
 import {
   Utensils, MapPin, Search, User, Heart, History,
   Settings, Bell, ChevronLeft, Star, MessageSquare,
   Video, Plus, Share2, Navigation, Filter, RefreshCw,
-  Dice5, Users, Menu, Play, ChevronRight, Phone, Trash2
+  Dice5, Users, Menu, Play, ChevronRight, Phone, Trash2, X
 } from 'lucide-react-native';
+
 
 import { View as AppView, Restaurant } from './types';
 import { MOCK_RESTAURANTS, CATEGORIES, BUDGETS, COLORS } from './constants';
@@ -147,7 +149,7 @@ const Splash: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 };
 
 // ─── Login ────────────────────────────────────────────────────
-const Login: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
+const Login: React.FC<{ navigate: (v: AppView) => void; setUser: (user: { id: string; name: string; email: string } | null) => void; }> = ({ navigate, setUser }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -173,6 +175,7 @@ const Login: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
 
       await AsyncStorage.setItem('token', data.token);
       await AsyncStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
       Alert.alert('WELLCOME', `WELLCOME BACK!, ${data.user.name}`);
       navigate('random');
 
@@ -216,7 +219,7 @@ const Login: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
 };
 
 // ─── Signup ───────────────────────────────────────────────────
-const Signup: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
+const Signup: React.FC<{ navigate: (v: AppView) => void; setUser: (user: { id: string; name: string; email: string } | null) => void; }> = ({ navigate, setUser }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -243,6 +246,7 @@ const Signup: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
 
       await AsyncStorage.setItem('token', data.token);
       await AsyncStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
       Alert.alert('สมัครสำเร็จ!', 'ยินดีต้อนรับสู่ Kin-Rai-Dee!');
       navigate('onboarding1');
 
@@ -1533,7 +1537,7 @@ const Profile: React.FC<{
           <View style={styles.avatar}>
             <Text style={{ fontSize: 32 }}>🍜</Text>
           </View>
-          <Text style={{ fontSize: 22, fontWeight: '900', marginTop: 12, letterSpacing: -0.5 }}>{user?.name || 'Food Explorer'}</Text>
+          <Text style={{ fontSize: 22, fontWeight: '900', marginTop: 12, letterSpacing: -0.5 }}>{user?.name || 'fail to read'}</Text>
           <Text style={{ color: COLORS.secondary, fontSize: 13 }}>{user?.email || 'Bangkok, Thailand'}</Text>
         </View>
 
@@ -2045,6 +2049,10 @@ const VideoFeed: React.FC<{
   const [uploading, setUploading] = useState(false);
   const [videos, setVideos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [caption, setCaption] = useState('');
+  const [videoPlayerModal, setVideoPlayerModal] = useState(false);
+  const [selectedVideo, setSelectedVideo] = useState<any>(null);
+  const videoRef = useRef<any>(null);
 
   const fetchVideos = async () => {
     try {
@@ -2111,8 +2119,8 @@ const VideoFeed: React.FC<{
         type: 'video/mp4'
       } as any);
       
-      // Optional: Add caption or restaurant ID if needed
-      formData.append('caption', 'My Food Reel');
+      // Add caption from state
+      formData.append('caption', caption.trim() || 'My Food Reel');
 
       const response = await fetch(`${API_URL}/videos`, {
         method: 'POST',
@@ -2127,6 +2135,7 @@ const VideoFeed: React.FC<{
 
       if (response.ok) {
         Alert.alert('Success', 'Video uploaded successfully!');
+        setCaption(''); // Reset caption
         fetchVideos();
       } else {
         throw new Error(data.message || 'Failed to upload video');
@@ -2180,6 +2189,16 @@ const VideoFeed: React.FC<{
     );
   };
 
+  const openVideoPlayer = (video: any) => {
+    console.log('Opening video:', video._id, 'videoUrl:', video.videoUrl);
+    if (!video.videoUrl) {
+      Alert.alert('ข้อผิดพลาด', 'ไม่มีลิงก์วิดีโอสำหรับไฟล์นี้');
+      return;
+    }
+    setSelectedVideo(video);
+    setVideoPlayerModal(true);
+  };
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
       <View style={{ padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2202,12 +2221,29 @@ const VideoFeed: React.FC<{
           contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 100 }}
           columnWrapperStyle={{ gap: 8 }}
           renderItem={({ item }) => (
-            <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
-              <Image source={{ uri: item.thumbnailUrl || `https://picsum.photos/seed/${item._id}/270/480` }} style={StyleSheet.absoluteFillObject} />
-              <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
-                <Play size={32} color="#fff" fill="#fff" />
-              </View>
-              {/* Delete Button - only for owner */}
+            <View style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
+              <TouchableOpacity 
+                style={{ flex: 1 }}
+                onPress={() => openVideoPlayer(item)}
+                activeOpacity={0.8}
+              >
+                <Image source={{ uri: item.thumbnailUrl || `https://picsum.photos/seed/${item._id}/270/480` }} style={StyleSheet.absoluteFillObject} />
+                <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
+                  <Play size={32} color="#fff" fill="#fff" />
+                </View>
+                {/* Info at the bottom */}
+                <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)' }}>
+                  <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }} numberOfLines={1}>{item.caption || item.restaurant?.name || 'Food Reel'}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, opacity: 0.9 }}>
+                    {/* Avatar placeholder */}
+                    <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', marginRight: 6 }}>
+                      <Text style={{ fontSize: 10, color: COLORS.primary, fontWeight: '700' }}>{item.user?.name?.[0]?.toUpperCase() || 'U'}</Text>
+                    </View>
+                    <Text style={{ color: '#fff', fontWeight: '500', fontSize: 11 }} numberOfLines={1}>{item.user?.name || 'Anonymous'}</Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+              {/* Delete Button - only for owner, positioned outside main press area */}
               {user && item.user && user.id === item.user._id && (
                 <TouchableOpacity
                   onPress={() => handleDeleteVideo(item._id)}
@@ -2215,26 +2251,17 @@ const VideoFeed: React.FC<{
                     position: 'absolute',
                     top: 8,
                     right: 8,
-                    backgroundColor: 'rgba(239, 68, 68, 0.7)', // red
+                    zIndex: 10,
+                    backgroundColor: 'rgba(239, 68, 68, 0.7)',
                     padding: 6,
                     borderRadius: 16,
                   }}
+                  activeOpacity={0.6}
                 >
                   <Trash2 size={16} color="#fff" />
                 </TouchableOpacity>
               )}
-              {/* Info at the bottom */}
-              <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)' }}>
-                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }} numberOfLines={1}>{item.caption || item.restaurant?.name || 'Food Reel'}</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, opacity: 0.9 }}>
-                  {/* Avatar placeholder */}
-                  <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', marginRight: 6 }}>
-                    <Text style={{ fontSize: 10, color: COLORS.primary, fontWeight: '700' }}>{item.user?.name?.[0]?.toUpperCase() || 'U'}</Text>
-                  </View>
-                  <Text style={{ color: '#fff', fontWeight: '500', fontSize: 11 }} numberOfLines={1}>{item.user?.name || 'Anonymous'}</Text>
-                </View>
-              </View>
-            </TouchableOpacity>
+            </View>
           )}
         />
       )}
@@ -2269,7 +2296,10 @@ const VideoFeed: React.FC<{
         visible={showModal}
         animationType="fade"
         transparent={true}
-        onRequestClose={() => setShowModal(false)}
+        onRequestClose={() => {
+          setShowModal(false);
+          setCaption(''); // Reset caption when modal closes
+        }}
       >
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
           <View style={{
@@ -2287,6 +2317,34 @@ const VideoFeed: React.FC<{
               </Text>
               <Text style={{ fontSize: 14, color: COLORS.secondary }}>
                 เลือกวิธีการเพิ่มวิดีโอของคุณ
+              </Text>
+            </View>
+
+            {/* Caption Input */}
+            <View style={{ marginBottom: 24 }}>
+              <Text style={{ fontSize: 16, fontWeight: '600', color: COLORS.dark, marginBottom: 8 }}>
+                คำบรรยาย (Caption)
+              </Text>
+              <TextInput
+                value={caption}
+                onChangeText={setCaption}
+                placeholder="เขียนคำบรรยายสำหรับวิดีโอของคุณ..."
+                placeholderTextColor={COLORS.secondary}
+                style={{
+                  borderWidth: 1,
+                  borderColor: COLORS.border,
+                  borderRadius: 12,
+                  padding: 16,
+                  fontSize: 16,
+                  color: COLORS.dark,
+                  minHeight: 80,
+                  textAlignVertical: 'top',
+                }}
+                multiline
+                maxLength={500}
+              />
+              <Text style={{ fontSize: 12, color: COLORS.secondary, textAlign: 'right', marginTop: 4 }}>
+                {caption.length}/500
               </Text>
             </View>
 
@@ -2364,7 +2422,10 @@ const VideoFeed: React.FC<{
 
             {/* Cancel Button */}
             <TouchableOpacity
-              onPress={() => setShowModal(false)}
+              onPress={() => {
+                setShowModal(false);
+                setCaption(''); // Reset caption
+              }}
               style={{
                 paddingVertical: 14,
                 paddingHorizontal: 20,
@@ -2377,6 +2438,100 @@ const VideoFeed: React.FC<{
               </Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      {/* Video Player Modal */}
+      <Modal
+        visible={videoPlayerModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setVideoPlayerModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          {/* Close Button */}
+          <TouchableOpacity
+            onPress={() => setVideoPlayerModal(false)}
+            style={{
+              position: 'absolute',
+              top: 50,
+              right: 20,
+              zIndex: 10,
+              backgroundColor: 'rgba(0,0,0,0.5)',
+              borderRadius: 20,
+              padding: 10,
+            }}
+          >
+            <X size={24} color="#fff" />
+          </TouchableOpacity>
+
+          {/* Video Player */}
+          {selectedVideo ? (
+            <ExpoVideo
+              ref={videoRef}
+              source={{ uri: selectedVideo.videoUrl }}
+              rate={1.0}
+              volume={1.0}
+              isMuted={false}
+              resizeMode="contain"
+              shouldPlay={true}
+              useNativeControls={true}
+              style={{ flex: 1 }}
+              onError={(error) => {
+                console.error('Video Error:', error);
+                console.log('Failed to load video from:', selectedVideo.videoUrl);
+                Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถเล่นวิดีโอได้');
+                setVideoPlayerModal(false);
+              }}
+              onLoad={() => console.log('Video loaded successfully')}
+            />
+          ) : (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 16 }}>กำลังโหลดวิดีโอ...</Text>
+            </View>
+          )}
+
+          {/* Video Info Overlay */}
+          {selectedVideo && (
+            <View style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              backgroundColor: 'rgba(0,0,0,0.7)',
+              padding: 20,
+              paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+            }}>
+              <Text style={{ color: '#fff', fontSize: 18, fontWeight: '700', marginBottom: 8 }}>
+                {selectedVideo.caption || 'Food Reel'}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: '#fff',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  marginRight: 12
+                }}>
+                  <Text style={{ fontSize: 14, color: COLORS.primary, fontWeight: '700' }}>
+                    {selectedVideo.user?.name?.[0]?.toUpperCase() || 'U'}
+                  </Text>
+                </View>
+                <View>
+                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '600' }}>
+                    {selectedVideo.user?.name || 'Anonymous'}
+                  </Text>
+                  {selectedVideo.restaurant && (
+                    <Text style={{ color: '#fff', fontSize: 14, opacity: 0.8 }}>
+                      📍 {selectedVideo.restaurant.name}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </View>
+          )}
         </View>
       </Modal>
 
@@ -3025,8 +3180,8 @@ export default function App() {
 
     switch (view) {
       case 'splash': return <Splash onDone={() => navigate('login')} />;
-      case 'login': return <Login navigate={navigate} />;
-      case 'signup': return <Signup navigate={navigate} />;
+      case 'login': return <Login navigate={navigate} setUser={setUser} />;
+      case 'signup': return <Signup navigate={navigate} setUser={setUser} />;
       case 'randomizer': return <Randomizer config={randomConfig} location={location} onSelect={onSelect} navigate={navigate} />;
       case 'random': return (
         <RandomView
