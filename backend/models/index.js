@@ -67,10 +67,11 @@ const ReviewSchema = new mongoose.Schema(
 // ─── VideoReview ──────────────────────────────────────────────
 const VideoReviewSchema = new mongoose.Schema(
   {
-    restaurant:   { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
+    restaurant:   { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', index: true }, // Not required, can be a general food reel
     user:         { type: mongoose.Schema.Types.ObjectId, ref: 'User',       required: true },
     videoUrl:     { type: String, required: true },
     thumbnailUrl: { type: String },
+    publicId:     { type: String }, // Cloudinary public_id for deletion
     caption:      { type: String, maxlength: 500 },
     likeCount:    { type: Number, default: 0 },
   },

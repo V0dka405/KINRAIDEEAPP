@@ -9,7 +9,7 @@ export type View =
   | 'videos' | 'profile' | 'community'
   | 'budget' | 'categories' | 'group-lobby'
   | 'map' | 'notifications' | 'add-review'
-  | 'history' | 'menu' | 'settings' | 'edit-profile' | 'random' | 'directions' | 'nearby'| 'create-post';
+  | 'history' | 'menu' | 'settings' | 'edit-profile' | 'random' | 'directions' | 'nearby'| 'create-post' | 'favorites';
 
 export interface MenuItem {
   id: string;

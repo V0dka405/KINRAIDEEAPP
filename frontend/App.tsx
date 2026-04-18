@@ -14,10 +14,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, Image, TouchableOpacity, ScrollView,
   StyleSheet, FlatList, Dimensions, Animated, Alert,
-  SafeAreaView, StatusBar, Platform, Modal,
+  SafeAreaView, StatusBar, Platform, Modal, ActivityIndicator, Linking
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 import {
   Utensils, MapPin, Search, User, Heart, History,
   Settings, Bell, ChevronLeft, Star, MessageSquare,
@@ -387,7 +388,35 @@ const Home: React.FC<{
         const data = await response.json();
 
         if (data.restaurants && data.restaurants.length > 0) {
-          const mapped: Restaurant[] = data.restaurants.map((r: any, idx: number) => ({
+          const mapped: Restaurant[] = data.restaurants
+            .filter((r: any) => {
+              const nameLower = (r.name || '').toLowerCase();
+              
+              // คำที่บ่งบอกว่าเป็นร้านอาหารแน่ๆ
+              const hasRestaurantKeyword = nameLower.includes('restaurant') || 
+                                           nameLower.includes('ร้าน') || 
+                                           nameLower.includes('อาหาร') || 
+                                           nameLower.includes('คาเฟ่') ||
+                                           nameLower.includes('cafe') ||
+                                           nameLower.includes('ครัว') ||
+                                           nameLower.includes('โภชนา');
+
+              // คำที่บ่งบอกว่าเป็นที่พัก
+              const isHotel = nameLower.includes('hotel') || 
+                              nameLower.includes('โรงแรม') || 
+                              nameLower.includes('resort') || 
+                              nameLower.includes('รีสอร์ท') ||
+                              nameLower.includes('hostel') ||
+                              nameLower.includes('โฮสเทล') ||
+                              nameLower.includes('ที่พัก') ||
+                              nameLower.includes('ห้องพัก');
+
+              // ตัดออกเฉพาะที่พักที่ไม่มีคำว่าร้านอาหาร (ถ้าเป็น "ห้องอาหารโรงแรม" จะรอดไปได้)
+              const shouldExclude = isHotel && !hasRestaurantKeyword;
+              
+              return !shouldExclude;
+            })
+            .map((r: any, idx: number) => ({
             id: r._id || `nearby-${idx}`,
             name: r.name,
             rating: r.rating || 0,
@@ -445,13 +474,38 @@ const Home: React.FC<{
         if (data.restaurants && data.restaurants.length > 0) {
           const mapped: Restaurant[] = data.restaurants
             .filter((r: any) => {
+              const nameLower = (r.name || '').toLowerCase();
+              
+              // คำที่บ่งบอกว่าเป็นร้านอาหารแน่ๆ
+              const hasRestaurantKeyword = nameLower.includes('restaurant') || 
+                                           nameLower.includes('ร้าน') || 
+                                           nameLower.includes('อาหาร') || 
+                                           nameLower.includes('คาเฟ่') ||
+                                           nameLower.includes('cafe') ||
+                                           nameLower.includes('ครัว') ||
+                                           nameLower.includes('โภชนา');
+
+              // คำที่บ่งบอกว่าเป็นที่พัก
+              const isHotel = nameLower.includes('hotel') || 
+                              nameLower.includes('โรงแรม') || 
+                              nameLower.includes('resort') || 
+                              nameLower.includes('รีสอร์ท') ||
+                              nameLower.includes('hostel') ||
+                              nameLower.includes('โฮสเทล') ||
+                              nameLower.includes('ที่พัก') ||
+                              nameLower.includes('ห้องพัก');
+
+              // ตัดออกเฉพาะที่พักที่ไม่มีคำว่าร้านอาหาร (ถ้าเป็น "ห้องอาหารโรงแรม" จะรอดไปได้)
+              const shouldExclude = isHotel && !hasRestaurantKeyword;
+
               // Apply budget filter
               const budgetOk = r.priceLevel <= selectedBudget;
               // Apply search filter
               const searchOk = !search.trim() || 
-                r.name.toLowerCase().includes(search.toLowerCase()) || 
-                r.address.toLowerCase().includes(search.toLowerCase());
-              return budgetOk && searchOk;
+                nameLower.includes(search.toLowerCase()) || 
+                (r.address && r.address.toLowerCase().includes(search.toLowerCase()));
+                
+              return !shouldExclude && budgetOk && searchOk;
             })
             .map((r: any, idx: number) => ({
               id: r._id || `all-${idx}`,
@@ -1073,6 +1127,31 @@ const Result: React.FC<{
   const isFav = favorites.some(f => f.id === restaurant.id);
   const [reviews, setReviews] = useState<any[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(false);
+  const [details, setDetails] = useState<{ website?: string; formatted_phone_number?: string; opening_hours?: { weekday_text: string[] } } | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(true);
+
+  useEffect(() => {
+    const fetchDetails = async () => {
+      // Don't fetch for mock or temporary data
+      if (!restaurant.id || restaurant.id.startsWith('mock-') || restaurant.id.includes('temp') || restaurant.id.includes('api-id')) {
+        setLoadingDetails(false);
+        return;
+      }
+      setLoadingDetails(true);
+      try {
+        const res = await fetch(`${API_URL}/restaurants/details/${restaurant.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setDetails(data);
+        }
+      } catch (e) {
+        console.error('Fetch details error:', e);
+      } finally {
+        setLoadingDetails(false);
+      }
+    };
+    fetchDetails();
+  }, [restaurant.id]);
 
   useEffect(() => {
     const fetchReviews = async () => {
@@ -1144,9 +1223,16 @@ const Result: React.FC<{
               <Navigation size={16} color="#fff" style={{ marginRight: 6 }} />
               <Text style={{ color: '#fff', fontWeight: '700' }}>นำทาง</Text>
             </Button>
-            <Button onPress={() => navigate('menu')} variant="outline" style={{ flex: 1 }}>
+            <Button
+              onPress={() => details?.website && Linking.openURL(details.website)}
+              variant="outline"
+              style={{ flex: 1, opacity: loadingDetails || !details?.website ? 0.5 : 1 }}
+              disabled={loadingDetails || !details?.website}
+            >
               <Menu size={16} color={COLORS.dark} style={{ marginRight: 6 }} />
-              <Text style={{ color: COLORS.dark, fontWeight: '700' }}>เมนู</Text>
+              <Text style={{ color: COLORS.dark, fontWeight: '700' }}>
+                {loadingDetails ? '...' : (details?.website ? 'ดูเมนู' : 'ไม่มีเมนู')}
+              </Text>
             </Button>
           </View>
 
@@ -1465,7 +1551,7 @@ const Profile: React.FC<{
         </View>
 
         {/* Favorites */}
-        <SectionHeader title="ร้านโปรด" onPress={() => { }} actionLabel="ดูทั้งหมด" />
+        <SectionHeader title="ร้านโปรด" onPress={() => navigate('favorites')} actionLabel="ดูทั้งหมด" />
         {favorites.length === 0
           ? <Text style={{ color: COLORS.secondary, fontSize: 13, marginBottom: 20 }}>ยังไม่มีร้านโปรด กด ❤️ ที่หน้าร้านเลย!</Text>
           : favorites.slice(0, 3).map(r => (
@@ -1951,37 +2037,212 @@ const CreatePost: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) 
 };
 
 // ─── VideoFeed ────────────────────────────────────────────────
-const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) => {
+const VideoFeed: React.FC<{ 
+  navigate: (v: AppView) => void;
+  user?: { id: string; name: string; email: string } | null;
+}> = ({ navigate, user }) => {
   const [showModal, setShowModal] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [videos, setVideos] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchVideos = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_URL}/videos`);
+      if (res.ok) {
+        const data = await res.json();
+        setVideos(data);
+      }
+    } catch (e) {
+      console.error('Fetch videos error:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchVideos();
+  }, []);
+
+  const uploadVideo = async (useCamera: boolean = false) => {
+    try {
+      setShowModal(false);
+      
+      const permissionResult = useCamera 
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (permissionResult.granted === false) {
+        Alert.alert('Permission to access camera/gallery is required!');
+        return;
+      }
+
+      const pickerResult = useCamera
+        ? await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+            allowsEditing: true,
+            quality: 1,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+            allowsEditing: true,
+            quality: 1,
+          });
+
+      if (pickerResult.canceled || !pickerResult.assets || pickerResult.assets.length === 0) {
+        return;
+      }
+
+      const videoAsset = pickerResult.assets[0];
+      setUploading(true);
+
+      const token = await AsyncStorage.getItem('token');
+      if (!token) {
+        Alert.alert('Please login first to upload videos.');
+        setUploading(false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('video', {
+        uri: Platform.OS === 'ios' ? videoAsset.uri.replace('file://', '') : videoAsset.uri,
+        name: 'video.mp4',
+        type: 'video/mp4'
+      } as any);
+      
+      // Optional: Add caption or restaurant ID if needed
+      formData.append('caption', 'My Food Reel');
+
+      const response = await fetch(`${API_URL}/videos`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          // Don't set Content-Type here, let fetch handle the boundary for multipart/form-data
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        Alert.alert('Success', 'Video uploaded successfully!');
+        fetchVideos();
+      } else {
+        throw new Error(data.message || 'Failed to upload video');
+      }
+
+    } catch (error: any) {
+      console.error('Upload Error:', error);
+      Alert.alert('Upload Failed', error.message || 'Something went wrong during upload.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDeleteVideo = async (videoId: string) => {
+    Alert.alert(
+      'ลบวิดีโอ',
+      'คุณแน่ใจหรือไม่ว่าต้องการลบวิดีโอนี้? การกระทำนี้ไม่สามารถย้อนกลับได้',
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        {
+          text: 'ลบ',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const token = await AsyncStorage.getItem('token');
+              if (!token) {
+                Alert.alert('ข้อผิดพลาด', 'กรุณาเข้าสู่ระบบอีกครั้ง');
+                return;
+              }
+
+              const res = await fetch(`${API_URL}/videos/${videoId}`, {
+                method: 'DELETE',
+                headers: {
+                  Authorization: `Bearer ${token}`
+                }
+              });
+
+              if (res.ok) {
+                Alert.alert('สำเร็จ', 'วิดีโอถูกลบเรียบร้อยแล้ว');
+                fetchVideos(); // Refresh the list
+              } else {
+                const data = await res.json();
+                throw new Error(data.message || 'ไม่สามารถลบวิดีโอได้');
+              }
+            } catch (e: any) {
+              Alert.alert('เกิดข้อผิดพลาด', e.message);
+            }
+          }
+        }
+      ]
+    );
+  };
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
-      <View style={{ padding: 20 }}>
+      <View style={{ padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
         <Text style={styles.homeTitle}>FOOD REELS</Text>
+        {(uploading || (loading && videos.length === 0)) && <ActivityIndicator size="small" color={COLORS.primary} />}
       </View>
 
-      <FlatList
-        data={MOCK_RESTAURANTS.slice(0, 6)}
-        keyExtractor={i => i.id}
-        numColumns={2}
-        contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 100 }}
-        columnWrapperStyle={{ gap: 8 }}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
-            <Image source={{ uri: item.imageUrl }} style={StyleSheet.absoluteFillObject} />
-            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
-              <Play size={32} color="#fff" fill="#fff" />
-            </View>
-            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 10 }}>
-              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }} numberOfLines={1}>{item.name}</Text>
-            </View>
-          </TouchableOpacity>
-        )}
-      />
+      {loading && videos.length === 0 ? (
+        <Text style={{ textAlign: 'center', color: COLORS.secondary, marginTop: 20 }}>กำลังโหลดวิดีโอ...</Text>
+      ) : videos.length === 0 ? (
+        <View style={{ padding: 24, alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: COLORS.border, margin: 20 }}>
+          <Video size={32} color={COLORS.secondary} style={{ marginBottom: 12, opacity: 0.5 }} />
+          <Text style={{ color: COLORS.secondary, textAlign: 'center' }}>ยังไม่มีวิดีโอเลย{'\n'}อัปโหลดวิดีโอแรกของคุณสิ!</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={videos}
+          keyExtractor={i => i._id}
+          numColumns={2}
+          contentContainerStyle={{ padding: 12, gap: 8, paddingBottom: 100 }}
+          columnWrapperStyle={{ gap: 8 }}
+          renderItem={({ item }) => (
+            <TouchableOpacity style={{ flex: 1, borderRadius: 16, overflow: 'hidden', aspectRatio: 9 / 16 }}>
+              <Image source={{ uri: item.thumbnailUrl || `https://picsum.photos/seed/${item._id}/270/480` }} style={StyleSheet.absoluteFillObject} />
+              <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)', justifyContent: 'center', alignItems: 'center' }}>
+                <Play size={32} color="#fff" fill="#fff" />
+              </View>
+              {/* Delete Button - only for owner */}
+              {user && item.user && user.id === item.user._id && (
+                <TouchableOpacity
+                  onPress={() => handleDeleteVideo(item._id)}
+                  style={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    backgroundColor: 'rgba(239, 68, 68, 0.7)', // red
+                    padding: 6,
+                    borderRadius: 16,
+                  }}
+                >
+                  <Trash2 size={16} color="#fff" />
+                </TouchableOpacity>
+              )}
+              {/* Info at the bottom */}
+              <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)' }}>
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }} numberOfLines={1}>{item.caption || item.restaurant?.name || 'Food Reel'}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, opacity: 0.9 }}>
+                  {/* Avatar placeholder */}
+                  <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', marginRight: 6 }}>
+                    <Text style={{ fontSize: 10, color: COLORS.primary, fontWeight: '700' }}>{item.user?.name?.[0]?.toUpperCase() || 'U'}</Text>
+                  </View>
+                  <Text style={{ color: '#fff', fontWeight: '500', fontSize: 11 }} numberOfLines={1}>{item.user?.name || 'Anonymous'}</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          )}
+        />
+      )}
 
       {/* ── ปุ่ม Post Video FAB ── */}
       <TouchableOpacity
         onPress={() => setShowModal(true)}
+        disabled={uploading}
         style={{
           position: 'absolute',
           bottom: 80,   // อยู่เหนือ BottomNav
@@ -1989,7 +2250,7 @@ const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) =
           width: 56,
           height: 56,
           borderRadius: 28,
-          backgroundColor: COLORS.primary,
+          backgroundColor: uploading ? COLORS.secondary : COLORS.primary,
           justifyContent: 'center',
           alignItems: 'center',
           shadowColor: COLORS.primary,
@@ -2031,10 +2292,7 @@ const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) =
 
             {/* Options */}
             <TouchableOpacity
-              onPress={() => {
-                setShowModal(false);
-                Alert.alert('📱 เลือกจากแกลเลอรี่', 'คุณลิคจะเลือกวิดีโอจากแกลเลอรี่');
-              }}
+              onPress={() => uploadVideo(false)}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -2069,10 +2327,7 @@ const VideoFeed: React.FC<{ navigate: (v: AppView) => void }> = ({ navigate }) =
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => {
-                setShowModal(false);
-                Alert.alert('📹 ถ่ายวิดีโอใหม่', 'ระบบกำลังเปิดกล้อง');
-              }}
+              onPress={() => uploadVideo(true)}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -2365,6 +2620,34 @@ const HistoryView: React.FC<{
         <RestaurantCard item={item} onPress={() => { onSelect(item); navigate('result'); }} />
       )}
     />
+  </SafeAreaView>
+);
+
+// ─── FavoritesView ─────────────────────────────────────────────
+const FavoritesView: React.FC<{
+  navigate: (v: AppView) => void;
+  favorites: Restaurant[];
+  onSelect: (r: Restaurant) => void;
+}> = ({ navigate, favorites, onSelect }) => (
+  <SafeAreaView style={[styles.screen, { backgroundColor: COLORS.bg }]}>
+    <View style={styles.homeHeader}>
+      <TouchableOpacity onPress={() => navigate('profile')} style={styles.iconBtn}>
+        <ChevronLeft size={24} color={COLORS.dark} />
+      </TouchableOpacity>
+      <Text style={{ fontSize: 22, fontWeight: '900', marginLeft: 12 }}>ร้านโปรดทั้งหมด</Text>
+    </View>
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 16, paddingBottom: 100 }}>
+      {favorites.length === 0 ? (
+        <View style={{ padding: 24, alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: COLORS.border }}>
+          <Heart size={32} color={COLORS.secondary} style={{ marginBottom: 12, opacity: 0.5 }} />
+          <Text style={{ color: COLORS.secondary, textAlign: 'center' }}>ยังไม่มีร้านโปรดเลย{'\n'}ไปหาร้านอร่อยแล้วกดถูกใจสิ!</Text>
+        </View>
+      ) : (
+        favorites.map(r => (
+          <RestaurantCard key={r.id} item={r} onPress={() => { onSelect(r); navigate('result'); }} />
+        ))
+      )}
+    </ScrollView>
   </SafeAreaView>
 );
 
@@ -2778,9 +3061,10 @@ export default function App() {
       case 'settings': return <SettingsView navigate={navigate} user={user} setUser={setUser} />;
       case 'community': return <Community navigate={navigate} user={user} />;
       case 'create-post': return <CreatePost navigate={navigate} />;
-      case 'videos': return <VideoFeed navigate={navigate} />;
+      case 'videos': return <VideoFeed navigate={navigate} user={user} />;
       case 'add-review': return selectedRestaurant ? <AddReview restaurant={selectedRestaurant} navigate={navigate} /> : null;
       case 'history': return <HistoryView navigate={navigate} history={history} onSelect={onSelect} />;
+      case 'favorites': return <FavoritesView navigate={navigate} favorites={favorites} onSelect={onSelect} />;
       default: return <Home navigate={navigate} restaurants={realRestaurants.length > 0 ? realRestaurants : MOCK_RESTAURANTS} onSelect={onSelect} category={category} setCategory={setCategory} />;
     }
   };

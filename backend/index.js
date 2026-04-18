@@ -8,9 +8,9 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import dotenv from 'dotenv';
-
-
-
+import { v2 as cloudinary } from 'cloudinary';
+import { CloudinaryStorage } from 'multer-storage-cloudinary';
+import multer from 'multer';
 
 // ดึง Models (ตรวจสอบว่าไฟล์ models/index.js ใช้ export แบบ ESM เช่นกัน)
 import { 
@@ -29,8 +29,8 @@ app.use(express.json());
 
 // ─── MongoDB Connection ───────────────────────────────────────
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/kinraidee')
-  .then(() => console.log('✅ MongoDB connected'))
-  .catch(err => console.error('❌ MongoDB error:', err));
+  .then(() => console.log('MongoDB connected ไม่มีปัญหา'))
+  .catch(err => console.error('MongoDB error: เปิดเน็ตยัง', err));
 
 // ─── Auth Middleware ──────────────────────────────────────────
 const authMiddleware = (req, res, next) => {
@@ -137,8 +137,13 @@ app.get('/api/restaurants', async (req, res) => {
       try {
         const apiKey = process.env.GOOGLE_PLACES_API_KEY;
         // ใช้ keyword เพื่อความแม่นยำในการหาประเภทอาหาร
+        let placeType = 'restaurant';
+        if (category && category.toLowerCase() === 'cafe') {
+            placeType = 'cafe';
+        }
+        
         const keywordParam = category ? `&keyword=${encodeURIComponent(category)}` : '';
-        const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=${radius}&type=restaurant${keywordParam}&key=${apiKey}`;
+        const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=${radius}&type=${placeType}${keywordParam}&key=${apiKey}`;
         
         const response = await fetch(url);
         const data = await response.json();
@@ -598,6 +603,109 @@ app.delete('/api/posts/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// ============================================================
+// VIDEO Routes (Cloudinary)
+// ============================================================
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'kinraidee_videos',
+    resource_type: 'video', // ให้รู้ว่าเป็นวิดีโอ
+    allowed_formats: ['mp4', 'mov', 'avi']
+  }
+});
+
+const upload = multer({ storage: storage });
+
+app.get('/api/videos', async (req, res) => {
+  try {
+    const videos = await VideoReview.find()
+      .populate('user', 'name avatarUrl')
+      .populate('restaurant', 'name')
+      .sort('-createdAt')
+      .limit(50);
+    res.json(videos);
+  } catch (err) {
+    console.error('Get videos error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.post('/api/videos', authMiddleware, upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No video file provided' });
+    }
+    
+    const { restaurantId, caption } = req.body;
+    
+    // Check if restaurant is valid (if provided)
+    let restaurantDocId = null;
+    if (restaurantId) {
+      const isValidMongoId = /^[0-9a-fA-F]{24}$/.test(restaurantId);
+      if (isValidMongoId) {
+        restaurantDocId = restaurantId;
+      } else {
+        const restaurant = await Restaurant.findOne({ externalId: restaurantId });
+        if (restaurant) {
+          restaurantDocId = restaurant._id;
+        }
+      }
+    }
+    
+    const videoReview = await VideoReview.create({
+      user: req.user.id,
+      restaurant: restaurantDocId || null, // Optional if we just want a general food reel
+      videoUrl: req.file.path,
+      publicId: req.file.filename, // Save public_id for deletion
+      caption: caption || ''
+    });
+
+    await videoReview.populate('user', 'name avatarUrl');
+    
+    res.status(201).json(videoReview);
+  } catch (err) {
+    console.error('Video upload error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+app.delete('/api/videos/:id', authMiddleware, async (req, res) => {
+  try {
+    const video = await VideoReview.findById(req.params.id);
+
+    if (!video) {
+      return res.status(404).json({ message: 'Video not found' });
+    }
+
+    // Check if the user is the owner of the video
+    if (video.user.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to delete this video' });
+    }
+
+    // Delete from Cloudinary if publicId exists
+    if (video.publicId) {
+      console.log(`Deleting video from Cloudinary: ${video.publicId}`);
+      await cloudinary.uploader.destroy(video.publicId, { resource_type: 'video' });
+    }
+
+    // Delete from MongoDB
+    await video.deleteOne();
+
+    res.json({ message: 'Video removed successfully' });
+  } catch (err) {
+    console.error('Video delete error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // ─── Health Check ─────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
@@ -606,7 +714,7 @@ app.get('/health', (req, res) => {
 // ─── Vercel Compatibility & Export ────────────────────────────
 // เปลี่ยนจากการ listen ตลอดเวลา เป็นการ export app เผื่อไว้ให้ Vercel
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+  app.listen(PORT, () => console.log(`เข้าได้แล้วจ้า Server running on http://localhost:${PORT}`));
 }
 
 export default app;

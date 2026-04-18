@@ -18,7 +18,8 @@ export default {
       "ACCESS_FINE_LOCATION",
       "ACCESS_COARSE_LOCATION",
       "CAMERA",
-      "READ_MEDIA_IMAGES"
+      "READ_MEDIA_IMAGES",
+      "READ_MEDIA_VIDEO"
     ],
     "config": {
       "googleMaps": {
