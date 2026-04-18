@@ -45,5 +45,11 @@ export default {
         "locationAlwaysAndWhenInUsePermission": "KinRaiDee ต้องการตำแหน่งของคุณ"
       }
     ]
-  ]
+  ],
+  // ส่วนที่เพิ่มเข้าไปเพื่อให้ EAS Build ทำงานได้
+  "extra": {
+    "eas": {
+      "projectId": "0ca1fa8e-9059-4f77-bb28-327d5c43b26f"
+    }
+  }
 };
